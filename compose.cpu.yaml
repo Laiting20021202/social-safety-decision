@@ -1,0 +1,20 @@
+services:
+  geometry-service:
+    profiles: ["cpu-demo"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.geometry
+    ports:
+      - "8010:8010"
+    restart: unless-stopped
+
+  vqa-service:
+    profiles: ["cpu-demo"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.vqa.cpu
+    ports:
+      - "8040:8040"
+    volumes:
+      - vqa_weights:/models/vqa
+    restart: unless-stopped

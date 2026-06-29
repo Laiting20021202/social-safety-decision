@@ -1,0 +1,30 @@
+services:
+  sam3-service:
+    profiles: ["jetson"]
+    build:
+      context: .
+      dockerfile: docker/jetson/Dockerfile.sam3
+    network_mode: host
+    volumes:
+      - sam3_weights:/models/sam3
+    restart: unless-stopped
+
+  robopoint-service:
+    profiles: ["jetson"]
+    build:
+      context: .
+      dockerfile: docker/jetson/Dockerfile.robopoint
+    network_mode: host
+    volumes:
+      - robopoint_weights:/models/robopoint
+    restart: unless-stopped
+
+  vqa-service:
+    profiles: ["jetson"]
+    build:
+      context: .
+      dockerfile: docker/jetson/Dockerfile.vqa
+    network_mode: host
+    volumes:
+      - vqa_weights:/models/vqa
+    restart: unless-stopped

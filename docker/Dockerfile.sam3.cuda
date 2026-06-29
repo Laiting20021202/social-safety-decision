@@ -1,0 +1,16 @@
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+
+WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3.12 python3-pip curl git \
+    && rm -rf /var/lib/apt/lists/*
+COPY pyproject.toml README.md ./
+COPY packages ./packages
+COPY services ./services
+RUN python3.12 -m pip install --no-cache-dir --break-system-packages . \
+    && python3.12 -m pip install --no-cache-dir --break-system-packages \
+      torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126 \
+    && python3.12 -m pip install --no-cache-dir --break-system-packages \
+      transformers accelerate
+ENV SAM3_MODEL_ID=facebook/sam3
+CMD ["python3.12", "-m", "uvicorn", "services.sam3_service.app:app", "--host", "0.0.0.0", "--port", "8020"]

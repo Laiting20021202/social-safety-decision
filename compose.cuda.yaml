@@ -1,0 +1,63 @@
+services:
+  dataset-service:
+    profiles: ["cuda-full"]
+    environment:
+      SAM3_SERVICE_URL: http://sam3-service:8020
+    depends_on:
+      - sam3-service
+
+  sam3-service:
+    profiles: ["cuda-full"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.sam3.cuda
+    ports:
+      - "8020:8020"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      SAM3_MODEL_ID: ${SAM3_MODEL_ID:-facebook/sam3}
+    volumes:
+      - sam3_weights:/models/sam3
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8020/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+
+  robopoint-service:
+    profiles: ["cuda-full"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.robopoint.cuda
+    ports:
+      - "8030:8030"
+    volumes:
+      - robopoint_weights:/models/robopoint
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+    restart: unless-stopped
+
+  vqa-service:
+    profiles: ["cuda-full"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.vqa.cuda
+    ports:
+      - "8040:8040"
+    volumes:
+      - vqa_weights:/models/vqa
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+    restart: unless-stopped

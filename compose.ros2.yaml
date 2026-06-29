@@ -1,0 +1,10 @@
+services:
+  ros2-adapter:
+    profiles: ["ros2"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ros2
+    network_mode: host
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+    restart: unless-stopped

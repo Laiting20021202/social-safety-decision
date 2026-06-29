@@ -1,0 +1,30 @@
+priority:
+  - hard_safety_rules
+  - tracking_geometry
+  - time_to_zone_prediction
+  - vqa_semantic_reasoning
+  - navigation_recommendation
+
+fail_safe_actions:
+  - pause
+  - human_review
+
+hard_rules:
+  - id: person_mask_zone_intersection
+    condition: person mask intersects zone
+    action: pause
+  - id: critical_time_to_zone
+    condition: time_to_zone_sec <= critical_threshold
+    action: pause
+  - id: warning_time_to_zone
+    condition: time_to_zone_sec <= warning_threshold
+    action: slow_down
+  - id: low_confidence_near_zone
+    condition: track confidence below threshold while near zone
+    action: human_review
+  - id: invalid_vqa_json
+    condition: vqa response cannot be parsed
+    action: pause
+  - id: resume_requires_clearance
+    condition: person left zone but clear duration is insufficient
+    action: pause

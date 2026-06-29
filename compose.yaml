@@ -1,0 +1,51 @@
+name: social-safety-amr
+
+services:
+  dataset-service:
+    profiles: ["dataset-demo", "cpu-demo", "cuda-full", "ci"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dataset
+    ports:
+      - "8000:8000"
+    environment:
+      APP_MODE: dataset_playback
+      SOCIALNAV_DATASET_ID: ${SOCIALNAV_DATASET_ID:-michaelmunje/SocialNav-SUB}
+      SOCIALNAV_DATASET_REVISION: ${SOCIALNAV_DATASET_REVISION:-f750caf46e5b33e6aef8c95af6a92fb4aff1d1b1}
+      SOCIALNAV_CACHE_DIR: /cache/huggingface
+      SOCIALNAV_LOCAL_REPO: ${SOCIALNAV_LOCAL_REPO:-}
+      ZONE_CONFIG_DIR: /app/config/zones
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - hf_cache:/cache/huggingface
+      - dataset_cache:/cache/dataset
+      - zone_configs:/app/config/zones
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  web-gui:
+    profiles: ["dataset-demo", "cpu-demo", "cuda-full", "ci"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8000}
+    depends_on:
+      dataset-service:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  hf_cache:
+  sam3_weights:
+  robopoint_weights:
+  vqa_weights:
+  dataset_cache:
+  experiment_outputs:
+  zone_configs:

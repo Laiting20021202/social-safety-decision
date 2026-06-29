@@ -1,0 +1,29 @@
+app:
+  mode: dataset_playback
+  log_level: INFO
+
+dataset:
+  id: michaelmunje/SocialNav-SUB
+  revision: f750caf46e5b33e6aef8c95af6a92fb4aff1d1b1
+  split: prompts
+  cache_dir: ${SOCIALNAV_CACHE_DIR}
+  local_repo: ${SOCIALNAV_LOCAL_REPO}
+  virtual_frame_interval_sec: 0.5
+
+playback:
+  default_speed: 1.0
+  allowed_speeds: [0.25, 0.5, 1.0, 2.0]
+  loop: false
+  step_mode: false
+  realtime_mode: true
+  experiment_mode: false
+
+geometry:
+  prediction_method: constant_velocity
+  warning_time_to_zone_sec: 3.0
+  critical_time_to_zone_sec: 1.0
+  minimum_clear_duration_sec: 2.0
+
+zones:
+  config_dir: config/zones
+  default_opacity: 0.28

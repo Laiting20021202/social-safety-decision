@@ -1,0 +1,12 @@
+FROM ros:humble-ros-base
+
+SHELL ["/bin/bash", "-lc"]
+WORKDIR /workspace
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-pip curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY pyproject.toml README.md ./
+COPY packages ./packages
+COPY services ./services
+RUN pip3 install --no-cache-dir --upgrade pip && pip3 install --no-cache-dir .
+CMD ["bash", "-lc", "source /opt/ros/humble/setup.bash && python3 -c 'print(\"ros2 adapter placeholder\")'"]

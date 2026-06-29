@@ -1,0 +1,5 @@
+services:
+  dataset-service:
+    profiles: ["dataset-demo"]
+  web-gui:
+    profiles: ["dataset-demo"]

@@ -1,0 +1,46 @@
+questions:
+  - id: spatial_inside_zone
+    category: spatial
+    question: "Is any tracked person currently inside the safety zone?"
+    allowed_answers: ["yes", "no", "unknown"]
+    required_inputs: ["overlay_frames", "track_metadata", "zone_metadata"]
+    safety_relevance: "Detect occupied safety zones."
+    trigger_conditions: ["person_near_zone", "manual_trigger"]
+  - id: spatial_closest_person
+    category: spatial
+    question: "Which tracked person is closest to the safety zone?"
+    allowed_answers: ["track_id", "none", "unknown"]
+    required_inputs: ["overlay_frames", "track_metadata", "zone_metadata"]
+    safety_relevance: "Identify target track for deterministic rules."
+    trigger_conditions: ["multiple_tracks", "manual_trigger"]
+  - id: temporal_will_enter_horizon
+    category: spatiotemporal
+    question: "Will any tracked person enter the safety zone within the prediction horizon?"
+    allowed_answers: ["yes", "no", "unknown"]
+    required_inputs: ["temporal_frames", "track_history", "zone_metadata", "prediction_horizon"]
+    safety_relevance: "Future zone-entry recall and unsafe continue prevention."
+    trigger_conditions: ["predicted_trajectory_intersects_zone", "distance_decreasing"]
+  - id: temporal_safe_resume
+    category: spatiotemporal
+    question: "Is it safe for the robot to resume?"
+    allowed_answers: ["yes", "no", "unknown"]
+    required_inputs: ["temporal_frames", "track_history", "zone_metadata", "safety_state"]
+    safety_relevance: "Reduce unsafe resume decisions."
+    trigger_conditions: ["resume_pending", "manual_trigger"]
+  - id: social_should_yield
+    category: social
+    question: "Should the robot continue, slow down, yield, or pause?"
+    allowed_answers: ["continue", "slow_down", "yield", "pause", "unknown"]
+    required_inputs: ["temporal_frames", "track_metadata", "zone_metadata", "robot_context"]
+    safety_relevance: "Social navigation recommendation after hard rules."
+    trigger_conditions: ["approaching_zone", "person_crossing_path", "manual_trigger"]
+
+answer_schema:
+  answer: string
+  target_track_ids: list[int]
+  zone_state: "clear|occupied|approaching|leaving|unknown"
+  risk_level: "safe|warning|critical|unknown"
+  recommended_action: "continue|slow_down|yield|pause|resume|human_review"
+  time_to_zone_sec: "float|null"
+  confidence: float
+  reason: string

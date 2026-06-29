@@ -1,0 +1,1 @@
+"""RoboPoint service placeholder."""

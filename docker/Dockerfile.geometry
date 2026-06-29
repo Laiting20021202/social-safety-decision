@@ -1,0 +1,8 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY packages ./packages
+COPY services ./services
+RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir .
+CMD ["uvicorn", "services.geometry_service.app:app", "--host", "0.0.0.0", "--port", "8010"]
