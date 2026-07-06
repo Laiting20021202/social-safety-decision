@@ -3,6 +3,11 @@ services:
     profiles: ["cuda-full"]
     environment:
       SAM3_SERVICE_URL: http://sam3-service:8020
+      DATASET_CACHE_DIR: /cache/dataset
+      SAM3_ANALYSIS_WIDTH: 640
+      SAM3_ANALYSIS_HEIGHT: 360
+      SAM3_TRACKING_FPS: 5
+      SAM3_MAX_OBJECTS: 6
     depends_on:
       - sam3-service
 
@@ -15,9 +20,20 @@ services:
       - "8020:8020"
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
-      SAM3_MODEL_ID: ${SAM3_MODEL_ID:-facebook/sam3}
+      HF_HOME: /models/huggingface
+      SAM3_IMAGE_REPO: facebook/sam3
+      SAM3_VIDEO_REPO: facebook/sam3.1
+      SAM3_MAX_OBJECTS: 6
+      SAM3_MULTIPLEX_COUNT: 16
+      SAM3_USE_FA3: "false"
+      SAM3_USE_ROPE_REAL: "false"
+      SAM3_COMPILE: "false"
+      SAM3_WARM_UP: "false"
+      SAM3_ASYNC_LOADING_FRAMES: "true"
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
     volumes:
-      - sam3_weights:/models/sam3
+      - hf_cache:/models/huggingface
+      - dataset_cache:/cache/dataset
     deploy:
       resources:
         reservations:

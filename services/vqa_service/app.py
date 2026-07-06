@@ -15,9 +15,26 @@ def health() -> ServiceHealth:
     )
 
 
+@app.get("/readiness", response_model=ServiceHealth)
+def readiness() -> ServiceHealth:
+    return health()
+
+
 @app.get("/providers")
 def providers() -> list[str]:
-    return ["qwen", "smolvlm", "mock-ci-only"]
+    return ["smolvlm", "qwen-planned"]
+
+
+@app.get("/runtime-info")
+def runtime_info() -> dict[str, object]:
+    return {
+        "service": "vqa-service",
+        "loaded_runtime": None,
+        "default_model": "HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
+        "formal_model_output": False,
+        "blocking_reason": "Temporal VQA runtime is not loaded yet.",
+    }
+
 
 
 @app.get("/model-info", response_model=ModelInfo)

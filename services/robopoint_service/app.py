@@ -15,6 +15,22 @@ def health() -> ServiceHealth:
     )
 
 
+@app.get("/readiness", response_model=ServiceHealth)
+def readiness() -> ServiceHealth:
+    return health()
+
+
+@app.get("/runtime-info")
+def runtime_info() -> dict[str, object]:
+    return {
+        "service": "robopoint-service",
+        "loaded_runtime": None,
+        "default_model": "wentao-yuan/robopoint-v1-vicuna-v1.5-13b",
+        "formal_model_output": False,
+        "blocking_reason": "RoboPoint runtime is not loaded yet.",
+    }
+
+
 @app.get("/model-info", response_model=ModelInfo)
 def model_info() -> ModelInfo:
     return ModelInfo(

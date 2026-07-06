@@ -1,0 +1,5 @@
+{
+  "message": "{'status': 'error', 'message': 'SAM 3.1 video model unavailable: 401 Client Error. (Request ID: Root=1-6a432a17-0252d22e13b10f28369d7893;89983f32-ffe3-43b7-99c7-560214e9f5d8)\\n\\nCannot access gated repo for url https://huggingface.co/facebook/sam3.1/resolve/main/config.json.\\nAccess to model facebook/sam3.1 is restricted. You must have access to it and be authenticated to access it. Please log in.'}",
+  "scenario_id": "101_Spot_1_155",
+  "status": "degraded"
+}

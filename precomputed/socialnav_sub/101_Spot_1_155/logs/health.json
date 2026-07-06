@@ -1,0 +1,11 @@
+{
+  "message": "",
+  "metadata": {
+    "app_mode": "dataset_playback"
+  },
+  "ready": true,
+  "service": "dataset-service",
+  "status": "ok",
+  "timestamp": "2026-06-30T02:29:41.918220Z",
+  "version": "0.1.0"
+}

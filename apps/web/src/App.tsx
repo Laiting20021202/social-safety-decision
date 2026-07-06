@@ -40,6 +40,21 @@ type VideoInfo = {
   generated: boolean;
 };
 
+type ImportedVideoInfo = {
+  video_id: string;
+  name: string;
+  dataset_name: string;
+  path: string;
+  video_reference: string;
+  native_fps: number;
+  frame_count: number;
+  duration_sec: number;
+  width: number;
+  height: number;
+  video_hash: string;
+  source: string;
+};
+
 type ZoneDefinition = {
   zone_id: string;
   scenario_id: string;
@@ -157,12 +172,43 @@ type AnalysisPacket = {
   metadata: Record<string, unknown>;
 };
 
+type Sam3VideoAnalysisResult = {
+  status?: string;
+  message?: string;
+  session_id?: string;
+  prompt_result_available?: boolean;
+  prompt_detection_count?: number;
+  prompt_frame_timestamp_sec?: number;
+  cached_analysis_frames?: number;
+};
+
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+const DEFAULT_SCENARIO = "34_Spot_0_765";
+const SAM3_SAMPLE_SCENARIOS = [
+  "34_Spot_0_765",
+  "101_Spot_1_155",
+  "34_Spot_0_1070",
+  "129_Spot_7_157",
+  "123_Spot_0_310",
+  "129_Spot_6_21",
+  "45_Spot_0_46"
+];
 const SPEEDS = [0.25, 0.5, 1, 1.5, 2];
 const HORIZONS = [1, 2, 3, 5];
 const VQA_INTERVALS = [1, 2, 3, 5];
 const BEV_WIDTH = 1000;
 const BEV_HEIGHT = 420;
+
+function scenarioLabel(scenario: ScenarioInfo | null | undefined): string {
+  if (!scenario) return "";
+  const name = scenario.metadata?.name;
+  return typeof name === "string" && name.trim() ? name : scenario.scenario_id;
+}
+
+function scenarioPreviewTimestamp(scenario: ScenarioInfo | null | undefined): number {
+  const timestamp = scenario?.metadata?.preview_timestamp_sec;
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? Math.max(0, timestamp) : 0;
+}
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`);
@@ -175,6 +221,25 @@ async function putJson<T>(path: string, body: unknown): Promise<T> {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<T>;
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json() as Promise<T>;
+}
+
+async function postForm<T>(path: string, body: FormData): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    body
   });
   if (!response.ok) throw new Error(await response.text());
   return response.json() as Promise<T>;
@@ -193,6 +258,10 @@ function App() {
   const [selectedScenario, setSelectedScenario] = useState("");
   const [scenarioDetails, setScenarioDetails] = useState<ScenarioInfo | null>(null);
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
+  const [importedVideos, setImportedVideos] = useState<ImportedVideoInfo[]>([]);
+  const [activeImportedVideo, setActiveImportedVideo] = useState<ImportedVideoInfo | null>(null);
+  const [localVideoPath, setLocalVideoPath] = useState("");
+  const [localVideoFile, setLocalVideoFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisPacket | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -204,6 +273,8 @@ function App() {
   const [roadLocked, setRoadLocked] = useState(true);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [precomputeStatus, setPrecomputeStatus] = useState("not started");
+  const [runtimeInfo, setRuntimeInfo] = useState<Record<string, unknown> | null>(null);
   const [toggles, setToggles] = useState({
     road: true,
     agents: true,
@@ -213,6 +284,7 @@ function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayRef = useRef<SVGSVGElement | null>(null);
   const lastAnalysisFetch = useRef(0);
+  const lastTimeRender = useRef(0);
   const analysisInFlight = useRef(false);
 
   const scenarioListItem = useMemo(
@@ -221,19 +293,28 @@ function App() {
   );
   const selectedScenarioInfo =
     scenarioDetails?.scenario_id === selectedScenario ? scenarioDetails : scenarioListItem;
-  const viewWidth = selectedScenarioInfo?.image_width || 1280;
-  const viewHeight = selectedScenarioInfo?.image_height || 720;
+  const selectedScenarioLabel = scenarioLabel(selectedScenarioInfo) || selectedScenario;
+  const usingLocalVideo = activeImportedVideo !== null;
+  const viewWidth = activeImportedVideo?.width || selectedScenarioInfo?.image_width || 1280;
+  const viewHeight = activeImportedVideo?.height || selectedScenarioInfo?.image_height || 720;
+  const isPromptFramePreview = analysis?.metadata.sam3_prompt_frame_preview === true;
+  const isCrossFrameTracking = analysis?.metadata.sam3_cross_frame_tracking === true;
+  const promptPreviewTimeAligned =
+    !isPromptFramePreview || Math.abs(currentTime - (analysis?.analysis_timestamp_sec ?? currentTime)) <= 0.12;
+  const displayTracks = promptPreviewTimeAligned ? analysis?.tracks ?? [] : [];
+  const displayMotions = promptPreviewTimeAligned ? analysis?.motions ?? [] : [];
+  const displayRiskZones = promptPreviewTimeAligned ? analysis?.risk_zones ?? [] : [];
   const motionByTrack = useMemo(
-    () => new Map((analysis?.motions ?? []).map((motion) => [motion.track_id, motion])),
-    [analysis]
+    () => new Map(displayMotions.map((motion) => [motion.track_id, motion])),
+    [displayMotions]
   );
   const vqaByTrack = useMemo(
     () => new Map((analysis?.vqa_directions ?? []).map((vqa) => [vqa.track_id, vqa])),
     [analysis]
   );
   const riskByTrack = useMemo(
-    () => new Map((analysis?.risk_zones ?? []).map((risk) => [risk.track_id, risk])),
-    [analysis]
+    () => new Map(displayRiskZones.map((risk) => [risk.track_id, risk])),
+    [displayRiskZones]
   );
   const analysisDelayed = (analysis?.system_status.analysis_delay_ms ?? 0) > 750;
 
@@ -241,9 +322,20 @@ function App() {
     getJson<DatasetInfo[]>("/datasets")
       .then((items) => {
         setDatasets(items);
-        if (items[0]) setSelectedDataset(items[0].dataset_id);
+        const preferred =
+          items.find((item) => item.dataset_id === "SCAND" || item.name === "SCAND") ?? items[0];
+        if (preferred) setSelectedDataset(preferred.dataset_id);
       })
       .catch((caught) => setError(String(caught)));
+  }, []);
+
+  useEffect(() => {
+    getJson<Record<string, unknown>>("/runtime-info")
+      .then(setRuntimeInfo)
+      .catch(() => setRuntimeInfo(null));
+    getJson<ImportedVideoInfo[]>("/videos/imports")
+      .then(setImportedVideos)
+      .catch(() => setImportedVideos([]));
   }, []);
 
   useEffect(() => {
@@ -251,39 +343,55 @@ function App() {
     getJson<ScenarioInfo[]>(`/datasets/${selectedDataset}/scenarios`)
       .then((items) => {
         setScenarios(items);
-        if (items[0]) setSelectedScenario(items[0].scenario_id);
+        const scandRgbScenario =
+          selectedDataset === "SCAND"
+            ? items.find((item) => scenarioLabel(item).toLowerCase().includes("ready rgb crop")) ??
+              items.find((item) => {
+                const label = scenarioLabel(item).toLowerCase();
+                return label.includes("clean") && label.includes("rgb crop");
+              }) ?? items.find((item) => scenarioLabel(item).toLowerCase().includes("rgb crop"))
+            : undefined;
+        const preferred =
+          scandRgbScenario ??
+          items.find((item) => item.scenario_id === DEFAULT_SCENARIO) ??
+          items.find((item) => SAM3_SAMPLE_SCENARIOS.includes(item.scenario_id)) ??
+          [...items].sort((left, right) => right.duration_sec - left.duration_sec)[0];
+        if (preferred) setSelectedScenario(preferred.scenario_id);
       })
       .catch((caught) => setError(String(caught)));
   }, [selectedDataset]);
 
   useEffect(() => {
     if (!selectedScenario) return;
+    setActiveImportedVideo(null);
     getJson<ScenarioInfo>(`/scenarios/${selectedScenario}`)
       .then(setScenarioDetails)
       .catch((caught) => setError(String(caught)));
   }, [selectedScenario]);
 
   useEffect(() => {
+    if (usingLocalVideo) return;
     if (!selectedScenario || !selectedScenarioInfo || selectedScenarioInfo.image_width <= 0) return;
+    const initialTime = scenarioPreviewTimestamp(selectedScenarioInfo);
     Promise.all([
       getJson<VideoInfo>(`/scenarios/${selectedScenario}/video-info`),
-      getAnalysis(selectedScenario, 0, predictionHorizon, vqaInterval)
+      getAnalysis(selectedScenario, initialTime, predictionHorizon, vqaInterval)
     ])
       .then(([nextVideo, nextAnalysis]) => {
         setVideoInfo(nextVideo);
         setAnalysis(nextAnalysis);
         setDuration(nextVideo.duration_sec || selectedScenarioInfo.duration_sec);
-        setCurrentTime(0);
+        setCurrentTime(initialTime);
         setRoadDraft(nextAnalysis.road.is_valid ? nextAnalysis.road.polygon : []);
         const video = videoRef.current;
         if (video) {
           video.pause();
-          video.currentTime = 0;
+          video.currentTime = initialTime;
           video.playbackRate = playbackSpeed;
         }
       })
       .catch((caught) => setError(String(caught)));
-  }, [selectedScenario, selectedScenarioInfo, predictionHorizon, vqaInterval, playbackSpeed]);
+  }, [selectedScenario, selectedScenarioInfo, predictionHorizon, vqaInterval, playbackSpeed, usingLocalVideo]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -297,15 +405,23 @@ function App() {
       const video = videoRef.current;
       if (video) {
         const time = video.currentTime || 0;
-        setCurrentTime(time);
+        const timeRenderInterval = video.paused ? 140 : 220;
+        if (now - lastTimeRender.current > timeRenderInterval) {
+          setCurrentTime(time);
+          lastTimeRender.current = now;
+        }
+        const analysisInterval = video.paused ? 350 : 750;
         if (
-          selectedScenario &&
+          (selectedScenario || activeImportedVideo) &&
           !analysisInFlight.current &&
-          now - lastAnalysisFetch.current > 120
+          now - lastAnalysisFetch.current > analysisInterval
         ) {
           analysisInFlight.current = true;
           lastAnalysisFetch.current = now;
-          getAnalysis(selectedScenario, time, predictionHorizon, vqaInterval)
+          const request = activeImportedVideo
+            ? getImportedVideoAnalysis(activeImportedVideo.video_id, time, predictionHorizon, vqaInterval)
+            : getAnalysis(selectedScenario, time, predictionHorizon, vqaInterval);
+          request
             .then((packet) => {
               const latestVideoTime = videoRef.current?.currentTime ?? time;
               if (packet.analysis_timestamp_sec >= latestVideoTime - 1.0) {
@@ -322,22 +438,202 @@ function App() {
     };
     animationFrame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [selectedScenario, predictionHorizon, vqaInterval]);
+  }, [selectedScenario, predictionHorizon, vqaInterval, activeImportedVideo]);
 
   const videoUrl = videoInfo ? `${API_BASE}${videoInfo.video_reference}` : "";
+  const analysisFrameIndex = analysis?.road.frame_index;
+  const videoFramePreviewUrl =
+    videoUrl && analysisFrameIndex !== undefined && !isPlaying
+      ? activeImportedVideo
+        ? `${API_BASE}/videos/imports/${activeImportedVideo.video_id}/frames/${analysisFrameIndex}/image?v=${analysis?.analysis_timestamp_sec ?? 0}`
+        : selectedScenario
+          ? `${API_BASE}/scenarios/${selectedScenario}/frames/${analysisFrameIndex}/image?v=${analysis?.analysis_timestamp_sec ?? 0}`
+          : ""
+      : "";
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
   const roadPolygon = analysis?.road.is_valid ? analysis.road.polygon : roadDraft;
   const roadPoints = roadPolygon.map((point) => `${point.x},${point.y}`).join(" ");
   const roadSource = analysis?.road.is_valid ? analysis.road.source : "unavailable";
   const sam3Status = formatSam3Message(analysis?.metadata.sam3_message);
+  const trackingMode = String(analysis?.metadata.tracking_mode ?? "unavailable");
+  const segmentationStatus = isPromptFramePreview
+    ? "SAM3 Prompt-Frame Segmentation Preview"
+    : isCrossFrameTracking
+      ? "SAM3.1 cross-frame tracking"
+      : trackingMode === "lightweight_visual_tracker"
+        ? "Lightweight boxes"
+        : "unavailable";
+  const vqaStatus = analysis?.system_status.vqa_status === "ok" ? "ok" : "VQA unavailable";
   const bevMode = String(analysis?.robot_corridor.metadata.mode ?? "Approximate BEV - RGB-only");
+  const hasBevProjection =
+    String(analysis?.robot_corridor.metadata.camera_profile ?? "none") !== "none";
+  const bevProjectionUrl =
+    analysis && hasBevProjection
+      ? activeImportedVideo
+        ? `${API_BASE}/videos/imports/${activeImportedVideo.video_id}/bev-image?timestamp_sec=${analysis.analysis_timestamp_sec.toFixed(3)}`
+        : `${API_BASE}/scenarios/${selectedScenario}/bev-image?timestamp_sec=${analysis.analysis_timestamp_sec.toFixed(3)}`
+      : "";
   const hasRoadOverlay = roadPolygon.length >= 3;
+  const sampleScenarios = scenarios.filter((scenario) =>
+    SAM3_SAMPLE_SCENARIOS.includes(scenario.scenario_id)
+  );
 
   const loadScenario = () => {
     if (!selectedScenario) return;
+    setActiveImportedVideo(null);
     getJson<VideoInfo>(`/scenarios/${selectedScenario}/video-info`)
       .then(setVideoInfo)
       .catch((caught) => setError(String(caught)));
+  };
+
+  const importedVideoInfo = (video: ImportedVideoInfo): VideoInfo => ({
+    scenario_id: video.video_id,
+    video_reference: video.video_reference,
+    source: "local_continuous_video",
+    fps: video.native_fps,
+    duration_sec: video.duration_sec,
+    frame_count: video.frame_count,
+    generated: false
+  });
+
+  const loadImportedVideo = (video: ImportedVideoInfo) => {
+    setActiveImportedVideo(video);
+    setVideoInfo(importedVideoInfo(video));
+    setAnalysis(null);
+    setRoadDraft([]);
+    setDuration(video.duration_sec);
+    setCurrentTime(0);
+    setPrecomputeStatus("local MP4 loaded; lightweight tracker live");
+    getImportedVideoAnalysis(video.video_id, 0, predictionHorizon, vqaInterval)
+      .then(setAnalysis)
+      .catch((caught) => setError(String(caught)));
+    const player = videoRef.current;
+    if (player) {
+      player.pause();
+      player.currentTime = 0;
+      player.playbackRate = playbackSpeed;
+    }
+  };
+
+  const importLocalVideo = () => {
+    const path = localVideoPath.trim();
+    if (!path && !localVideoFile) {
+      setPrecomputeStatus("local MP4 required");
+      return;
+    }
+    setPrecomputeStatus("importing local MP4");
+    const request = localVideoFile
+      ? (() => {
+          const form = new FormData();
+          form.append("file", localVideoFile);
+          form.append("name", localVideoFile.name.replace(/\.mp4$/i, ""));
+          form.append("dataset_name", "Local Continuous Video");
+          return postForm<ImportedVideoInfo>("/videos/import", form);
+        })()
+      : postJson<ImportedVideoInfo>("/videos/import", {
+          path,
+          dataset_name: "Local Continuous Video"
+        });
+    request
+      .then((record) => {
+        setImportedVideos((current) => [record, ...current.filter((item) => item.video_id !== record.video_id)]);
+        loadImportedVideo(record);
+        setPrecomputeStatus(`imported: ${record.native_fps.toFixed(1)} FPS, ${record.duration_sec.toFixed(1)} s`);
+      })
+      .catch((caught) => {
+        const message = String(caught);
+        setPrecomputeStatus(`blocked: ${message}`);
+        setError(message);
+      });
+  };
+
+  const rerunAnalysis = () => {
+    if (activeImportedVideo) {
+      setPrecomputeStatus("refreshing lightweight tracker");
+      getImportedVideoAnalysis(activeImportedVideo.video_id, currentTime, predictionHorizon, vqaInterval)
+        .then((packet) => {
+          setAnalysis(packet);
+          setPrecomputeStatus(`ok: ${packet.tracks.length} lightweight tracks`);
+        })
+        .catch((caught) => {
+          const message = String(caught);
+          setPrecomputeStatus(`blocked: ${message}`);
+          setError(message);
+        });
+      return;
+    }
+    if (!selectedScenario) return;
+    setPrecomputeStatus("running");
+    postJson<Sam3VideoAnalysisResult>(`/scenarios/${selectedScenario}/analysis/sam3-video`, {
+      prompt: "person",
+      prompt_frame_index: 0,
+      max_frame_num_to_track: 30
+    })
+      .then((result) => {
+        const status = String(result.status ?? "unknown");
+        const promptPreview =
+          result.prompt_result_available === true &&
+          typeof result.prompt_frame_timestamp_sec === "number";
+        if (promptPreview) {
+          const targetTime = Math.max(0, result.prompt_frame_timestamp_sec ?? 0);
+          const video = videoRef.current;
+          if (video) {
+            video.pause();
+            video.currentTime = targetTime;
+          }
+          setCurrentTime(targetTime);
+          const count = result.prompt_detection_count ?? result.cached_analysis_frames ?? 0;
+          setPrecomputeStatus(
+            status === "ok"
+              ? `ok: ${count} SAM3 masks cached`
+              : `partial: ${count} SAM3 Prompt-Frame Segmentation Preview`
+          );
+          return getAnalysis(selectedScenario, targetTime, predictionHorizon, vqaInterval);
+        }
+        const message = String(result.message ?? result.session_id ?? "");
+        setPrecomputeStatus(message ? `${status}: ${message}` : status);
+        return getAnalysis(selectedScenario, currentTime, predictionHorizon, vqaInterval);
+      })
+      .then((packet) => {
+        setAnalysis(packet);
+      })
+      .catch((caught) => {
+        const message = String(caught);
+        setPrecomputeStatus(`blocked: ${message}`);
+        setError(message);
+      });
+  };
+
+  const rerunRoad = () => {
+    if (usingLocalVideo) {
+      setPrecomputeStatus("road segmentation for local MP4 is not wired to GUI yet");
+      return;
+    }
+    if (!selectedScenario) return;
+    const frameIndex =
+      videoInfo && videoInfo.duration_sec > 0 && videoInfo.frame_count > 1
+        ? Math.min(
+            videoInfo.frame_count - 1,
+            Math.max(0, Math.round((currentTime / videoInfo.duration_sec) * (videoInfo.frame_count - 1)))
+          )
+        : 0;
+    setPrecomputeStatus("running road");
+    postJson<Record<string, unknown>>(`/scenarios/${selectedScenario}/analysis/sam3-road`, {
+      frame_index: frameIndex,
+      prompts: ["road", "sidewalk", "walkable path"]
+    })
+      .then((result) => {
+        const status = String(result.status ?? "unknown");
+        const message = String(result.message ?? "");
+        setPrecomputeStatus(message ? `${status}: ${message}` : status);
+        return getAnalysis(selectedScenario, currentTime, predictionHorizon, vqaInterval);
+      })
+      .then(setAnalysis)
+      .catch((caught) => {
+        const message = String(caught);
+        setPrecomputeStatus(`blocked: ${message}`);
+        setError(message);
+      });
   };
 
   const play = () => {
@@ -455,7 +751,7 @@ function App() {
           <select value={selectedScenario} onChange={(event) => setSelectedScenario(event.target.value)}>
             {scenarios.map((scenario) => (
               <option key={scenario.scenario_id} value={scenario.scenario_id}>
-                {scenario.scenario_id}
+                {scenarioLabel(scenario)}
               </option>
             ))}
           </select>
@@ -464,6 +760,70 @@ function App() {
         <button className="primary-button" onClick={loadScenario}>
           Load
         </button>
+
+        <div className="button-grid two">
+          <button className="secondary-button" onClick={rerunAnalysis}>
+            Run SAM3 People
+          </button>
+          <button className="secondary-button" onClick={rerunRoad}>
+            Re-run Road
+          </button>
+        </div>
+
+        {sampleScenarios.length > 0 && (
+          <div className="panel-block compact">
+            <h2>SAM3 Samples</h2>
+            <div className="sample-grid">
+              {sampleScenarios.map((scenario) => (
+                <button
+                  key={scenario.scenario_id}
+                  className={scenario.scenario_id === selectedScenario ? "sample-button active" : "sample-button"}
+                  onClick={() => setSelectedScenario(scenario.scenario_id)}
+                >
+                  {scenarioLabel(scenario)}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="panel-block compact">
+          <h2>Local MP4</h2>
+          <label>
+            MP4 path
+            <input
+              type="text"
+              value={localVideoPath}
+              onChange={(event) => setLocalVideoPath(event.target.value)}
+              placeholder="/absolute/path/to/video.mp4"
+            />
+          </label>
+          <label>
+            MP4 file
+            <input
+              type="file"
+              accept="video/mp4"
+              onChange={(event) => setLocalVideoFile(event.target.files?.[0] ?? null)}
+            />
+          </label>
+          <button className="secondary-button" onClick={importLocalVideo}>
+            Import MP4
+          </button>
+          {importedVideos.length > 0 && (
+            <div className="sample-grid">
+              {importedVideos.slice(0, 6).map((video) => (
+                <button
+                  key={video.video_id}
+                  className={activeImportedVideo?.video_id === video.video_id ? "sample-button active" : "sample-button"}
+                  onClick={() => loadImportedVideo(video)}
+                >
+                  {video.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
 
         <div className="button-grid">
           <IconButton label="Play" onClick={play}>
@@ -538,7 +898,7 @@ function App() {
             onClick={() => setToggles((current) => ({ ...current, road: !current.road }))}
           />
           <OverlayToggle
-            label="SAM3 Agents"
+            label="Agents"
             enabled={toggles.agents}
             onClick={() => setToggles((current) => ({ ...current, agents: !current.agents }))}
           />
@@ -561,6 +921,10 @@ function App() {
           <strong>{currentTime.toFixed(2)} s</strong>
           <span>Analysis</span>
           <strong>{(analysis?.analysis_timestamp_sec ?? 0).toFixed(2)} s</strong>
+          <span>Precompute</span>
+          <strong>{precomputeStatus}</strong>
+          <span>Segmentation</span>
+          <strong>{segmentationStatus}</strong>
           <span>Tracking FPS</span>
           <strong>{(analysis?.system_status.tracking_fps ?? 0).toFixed(1)}</strong>
           <span>SAM3 Road</span>
@@ -587,9 +951,9 @@ function App() {
 
       <section className="viewer-column" aria-label="Analysis viewer">
         <div className="viewer-toolbar">
-          <span>{selectedScenario || "No scenario"}</span>
+          <span>{activeImportedVideo?.name || selectedScenarioLabel || "No scenario"}</span>
           <span>{videoInfo?.source ?? "video unavailable"}</span>
-          <span>SAM3: {sam3Status}</span>
+          <span>Tracker: {formatTrackingMode(trackingMode)}</span>
           <span>BEV: {bevMode}</span>
         </div>
 
@@ -600,14 +964,27 @@ function App() {
                 ref={videoRef}
                 src={videoUrl}
                 playsInline
-                preload="metadata"
+                preload="auto"
                 onPlay={() => setIsPlaying(true)}
                 onPause={() => setIsPlaying(false)}
                 onLoadedMetadata={(event) => {
-                  setDuration(event.currentTarget.duration || videoInfo?.duration_sec || 0);
-                  event.currentTarget.playbackRate = playbackSpeed;
+                  const player = event.currentTarget;
+                  const nextDuration = player.duration || videoInfo?.duration_sec || 0;
+                  setDuration(nextDuration);
+                  player.playbackRate = playbackSpeed;
+                  if (currentTime > 0 && Math.abs(player.currentTime - currentTime) > 0.1) {
+                    player.currentTime = Math.min(currentTime, Math.max(0, nextDuration - 0.05));
+                  }
                 }}
               />
+              {videoFramePreviewUrl && (
+                <img
+                  className="video-frame-preview"
+                  src={videoFramePreviewUrl}
+                  alt=""
+                  aria-hidden="true"
+                />
+              )}
               <svg
                 ref={overlayRef}
                 className="overlay-layer"
@@ -643,7 +1020,7 @@ function App() {
                     />
                   ))}
                 {toggles.agents &&
-                  (analysis?.tracks ?? []).map((track) => (
+                  displayTracks.map((track) => (
                     <AgentOverlay
                       key={track.track_id}
                       track={track}
@@ -668,6 +1045,17 @@ function App() {
           </div>
           <svg viewBox={`0 0 ${BEV_WIDTH} ${BEV_HEIGHT}`} className="bev-canvas">
             <rect x="0" y="0" width={BEV_WIDTH} height={BEV_HEIGHT} className="bev-bg" />
+            {bevProjectionUrl && (
+              <image
+                href={bevProjectionUrl}
+                x="0"
+                y="0"
+                width={BEV_WIDTH}
+                height={BEV_HEIGHT}
+                preserveAspectRatio="none"
+                className="bev-projection"
+              />
+            )}
             {toggles.road && hasRoadOverlay && (
               <polygon points={toBevPoints(roadPolygon, viewWidth, viewHeight)} className="bev-road" />
             )}
@@ -693,7 +1081,7 @@ function App() {
               </g>
             )}
             {toggles.risk &&
-              (analysis?.risk_zones ?? []).map((risk) => (
+              displayRiskZones.map((risk) => (
                 <g key={`risk-${risk.track_id}`}>
                   <polygon
                     points={normalizedPoints(risk.risk_polygon)}
@@ -703,11 +1091,12 @@ function App() {
                 </g>
               ))}
             {toggles.agents &&
-              (analysis?.tracks ?? []).map((track) => {
-                const point = pointToBev(track.ground_contact_point ?? track.centroid, viewWidth, viewHeight);
+              displayTracks.map((track) => {
+                const point = trackToBev(track, viewWidth, viewHeight);
                 const motion = motionByTrack.get(track.track_id);
                 const risk = riskByTrack.get(track.track_id);
                 const arrow = motion?.velocity_vector ?? [0, 0];
+                const idPrefix = track.metadata.stable_track_id === false ? "Object" : "Track";
                 return (
                   <g key={`bev-agent-${track.track_id}`}>
                     <circle cx={point.x * BEV_WIDTH} cy={point.y * BEV_HEIGHT} r={9} className="bev-agent" />
@@ -719,14 +1108,21 @@ function App() {
                       className="bev-agent-arrow"
                     />
                     <text x={point.x * BEV_WIDTH + 12} y={point.y * BEV_HEIGHT - 8} className="bev-label">
-                      {risk?.intersects_robot_corridor ? `ID ${track.track_id} Collision Risk` : `ID ${track.track_id}`}
+                      {risk?.intersects_robot_corridor
+                        ? `${idPrefix} ${track.track_id} Collision Risk`
+                        : `${idPrefix} ${track.track_id}`}
                     </text>
                   </g>
                 );
               })}
-            {analysis && analysis.tracks.length === 0 && (
+            {analysis && displayTracks.length === 0 && (
               <text x={32} y={54} className="bev-empty-note">
-                SAM3 tracking unavailable - BEV corridor only
+                Tracking unavailable - BEV corridor only
+              </text>
+            )}
+            {isPromptFramePreview && promptPreviewTimeAligned && (
+              <text x={32} y={86} className="bev-preview-note">
+                SAM3 Prompt-Frame Segmentation Preview
               </text>
             )}
           </svg>
@@ -740,16 +1136,16 @@ function App() {
 
       <section className="sidebar right-panel" aria-label="Track list">
         <div className="panel-block">
-          <h2>Track List</h2>
+          <h2>{isPromptFramePreview ? "Prompt Objects" : "Track List"}</h2>
           <div className="track-table">
             <div className="track-row header">
-              <span>ID</span>
+              <span>{isPromptFramePreview ? "Object ID" : "Track ID"}</span>
               <span>Type</span>
               <span>Direction</span>
               <span>Speed</span>
               <span>Risk</span>
             </div>
-            {(analysis?.tracks ?? []).map((track) => {
+            {displayTracks.map((track) => {
               const motion = motionByTrack.get(track.track_id);
               const vqa = vqaByTrack.get(track.track_id);
               const risk = riskByTrack.get(track.track_id);
@@ -762,16 +1158,22 @@ function App() {
                     <span>{formatSpeed(motion)}</span>
                     <span className={`risk-chip ${risk?.risk_level ?? "unknown"}`}>{risk?.risk_level ?? "unknown"}</span>
                   </summary>
-                  <StatusRow label="Path relation" value={vqa?.path_relation ?? "uncertain"} />
-                  <StatusRow label="VQA update" value={vqa?.updated_at_sec != null ? `${vqa.updated_at_sec.toFixed(1)} s` : "unavailable"} />
-                  <StatusRow label="VQA confidence" value={(vqa?.confidence ?? 0).toFixed(2)} />
+                  <StatusRow
+                    label="VQA relation"
+                    value={analysis?.system_status.vqa_status === "ok" ? vqa?.path_relation ?? "uncertain" : "VQA unavailable"}
+                  />
+                  <StatusRow label="VQA update" value={vqaStatus} />
+                  <StatusRow
+                    label="VQA confidence"
+                    value={analysis?.system_status.vqa_status === "ok" ? (vqa?.confidence ?? 0).toFixed(2) : "VQA unavailable"}
+                  />
                   <StatusRow label="Motion cue" value={formatDirection(motion?.direction_label_geometry ?? "uncertain")} />
                   <StatusRow label="Track confidence" value={track.confidence.toFixed(2)} />
                   <StatusRow label="Time to path" value={risk?.time_to_intersection_sec != null ? `${risk.time_to_intersection_sec.toFixed(1)} s` : "none"} />
                 </details>
               );
             })}
-            {analysis && analysis.tracks.length === 0 && (
+            {analysis && displayTracks.length === 0 && (
               <div className="empty-table">Tracking unavailable</div>
             )}
           </div>
@@ -780,11 +1182,16 @@ function App() {
         <div className="panel-block">
           <h2>System Status</h2>
           <StatusRow label="SAM3 road" value={analysis?.system_status.road_status ?? "unavailable"} />
-          <StatusRow label="SAM3 tracking" value={analysis?.system_status.tracking_status ?? "unavailable"} />
-          <StatusRow label="VQA" value={analysis?.system_status.vqa_status ?? "unavailable"} />
+          <StatusRow label="Object tracking" value={analysis?.system_status.tracking_status ?? "unavailable"} />
+          <StatusRow label="Tracking mode" value={formatTrackingMode(trackingMode)} />
+          <StatusRow label="VQA" value={vqaStatus} />
           <StatusRow label="Delay" value={`${analysis?.system_status.analysis_delay_ms ?? 0} ms`} />
           <StatusRow label="BEV safety map" value={bevMode} />
           <StatusRow label="SAM3 runtime" value={sam3Status} />
+          <StatusRow label="Segmentation" value={segmentationStatus} />
+          <StatusRow label="Dataset revision" value={String(runtimeInfo?.dataset_revision ?? "unknown")} />
+          <StatusRow label="Precomputed / Live" value={String(analysis?.metadata.sam3_precomputed ? "precomputed" : "not precomputed")} />
+          <StatusRow label="Formal output" value={String(analysis?.metadata.formal_model_output ?? false)} />
         </div>
 
         <details className="debug-drawer">
@@ -810,6 +1217,20 @@ async function getAnalysis(
   return getJson<AnalysisPacket>(`/scenarios/${scenarioId}/analysis?${params.toString()}`);
 }
 
+async function getImportedVideoAnalysis(
+  videoId: string,
+  timestampSec: number,
+  predictionHorizonSec: number,
+  vqaUpdateIntervalSec: number
+) {
+  const params = new URLSearchParams({
+    timestamp_sec: timestampSec.toFixed(3),
+    prediction_horizon_sec: String(predictionHorizonSec),
+    vqa_update_interval_sec: String(vqaUpdateIntervalSec)
+  });
+  return getJson<AnalysisPacket>(`/videos/imports/${videoId}/analysis?${params.toString()}`);
+}
+
 function AgentOverlay({
   track,
   motion,
@@ -831,6 +1252,7 @@ function AgentOverlay({
   const arrowScale = Math.min(1.2, Math.max(0.35, (motion?.speed ?? 0.04) * 2.8));
   const x2 = ground.x + velocity[0] * viewWidth * arrowScale;
   const y2 = ground.y + velocity[1] * viewHeight * arrowScale;
+  const idPrefix = track.metadata.stable_track_id === false ? "Object" : "Track";
   return (
     <g className="agent-overlay">
       {track.mask_polygon.length >= 3 && (
@@ -854,7 +1276,7 @@ function AgentOverlay({
         <g>
           <rect x={ground.x + 12} y={ground.y - 74} width={220} height={64} rx={6} className="agent-label-bg" />
           <text x={ground.x + 22} y={ground.y - 52} className="agent-label">
-            ID {track.track_id} | {titleCase(track.class_name)}
+            {idPrefix} {track.track_id} | {titleCase(track.class_name)}
           </text>
           <text x={ground.x + 22} y={ground.y - 32} className="agent-label-sub">
             Direction: {formatDirection(motion?.direction_label_fused ?? "uncertain")}
@@ -910,9 +1332,30 @@ function StatusRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function trackToBev(track: TrackObservation, imageWidth: number, imageHeight: number): Point2D {
+  const metadataPoint = track.metadata.bev_ground_point;
+  if (
+    metadataPoint &&
+    typeof metadataPoint === "object" &&
+    "x" in metadataPoint &&
+    "y" in metadataPoint
+  ) {
+    const candidate = metadataPoint as { x?: unknown; y?: unknown };
+    if (typeof candidate.x === "number" && typeof candidate.y === "number") {
+      return {
+        x: clamp(candidate.x, 0, 1),
+        y: clamp(candidate.y, 0, 1)
+      };
+    }
+  }
+  return pointToBev(track.ground_contact_point ?? track.centroid, imageWidth, imageHeight);
+}
+
 function pointToBev(point: Point2D, imageWidth: number, imageHeight: number): Point2D {
   const nx = imageWidth > 0 ? clamp(point.x / imageWidth, 0, 1) : 0.5;
-  const ny = imageHeight > 0 ? clamp(point.y / imageHeight, 0, 1) : 0.5;
+  const effectiveHeight =
+    imageHeight > imageWidth * 0.85 ? Math.min(imageHeight, imageWidth * 9 / 16) : imageHeight;
+  const ny = effectiveHeight > 0 ? clamp(point.y / effectiveHeight, 0, 1) : 0.5;
   return { x: nx, y: clamp((ny - 0.45) / 0.55, 0, 1) };
 }
 
@@ -956,6 +1399,13 @@ function formatSam3Message(value: unknown) {
   if (message.includes("SAM3_SERVICE_URL is not configured")) return "service not configured";
   if (message.length > 92) return `${message.slice(0, 89)}...`;
   return message;
+}
+
+function formatTrackingMode(value: string) {
+  if (value === "sam3.1_video_tracking") return "SAM3.1 tracking";
+  if (value === "sam3_prompt_frame_preview") return "SAM3 prompt preview";
+  if (value === "lightweight_visual_tracker") return "Lightweight visual";
+  return "unavailable";
 }
 
 function titleCase(value: string) {

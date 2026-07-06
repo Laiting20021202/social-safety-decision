@@ -1,16 +1,53 @@
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    HF_HOME=/models/huggingface \
+    SAM3_IMAGE_REPO=facebook/sam3 \
+    SAM3_VIDEO_REPO=facebook/sam3.1 \
+    SAM3_MAX_OBJECTS=6 \
+    SAM3_MULTIPLEX_COUNT=16 \
+    SAM3_USE_FA3=false \
+    SAM3_USE_ROPE_REAL=false \
+    SAM3_COMPILE=false \
+    SAM3_WARM_UP=false \
+    SAM3_ASYNC_LOADING_FRAMES=true \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 WORKDIR /app
+
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3.12 python3-pip curl git \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      ffmpeg \
+      git \
+      software-properties-common \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+      python3.12 \
+      python3.12-dev \
+      python3.12-venv \
     && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
+    && python3.12 /tmp/get-pip.py \
+    && rm -f /tmp/get-pip.py
+
+RUN python3.12 -m pip install --no-cache-dir --break-system-packages \
+    torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 \
+    --index-url https://download.pytorch.org/whl/cu124
+
+RUN git clone https://github.com/facebookresearch/sam3.git /opt/sam3 \
+    && git -C /opt/sam3 checkout 5dd401d1c5c1d5c3eedff06d41b77af824517619 \
+    && python3.12 -m pip install --no-cache-dir --break-system-packages -e /opt/sam3 \
+    && python3.12 -m pip install --no-cache-dir --break-system-packages \
+      einops==0.8.1 opencv-python-headless==4.9.0.80 psutil==7.2.0 pycocotools==2.0.10 scipy==1.14.1
+
 COPY pyproject.toml README.md ./
 COPY packages ./packages
 COPY services ./services
-RUN python3.12 -m pip install --no-cache-dir --break-system-packages . \
-    && python3.12 -m pip install --no-cache-dir --break-system-packages \
-      torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126 \
-    && python3.12 -m pip install --no-cache-dir --break-system-packages \
-      transformers accelerate
-ENV SAM3_MODEL_ID=facebook/sam3
+COPY scripts ./scripts
+RUN python3.12 -m pip install --no-cache-dir --break-system-packages .
+
 CMD ["python3.12", "-m", "uvicorn", "services.sam3_service.app:app", "--host", "0.0.0.0", "--port", "8020"]
