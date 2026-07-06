@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <title>RGB Social Navigation BEV 任務報告</title>
+  <style>
+    @page { size: A4; margin: 17mm 15mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #1d1d1f;
+      font-family: "Noto Sans CJK TC", "Noto Sans CJK SC", "WenQuanYi Micro Hei", "DejaVu Sans", sans-serif;
+      font-size: 12.2px;
+      line-height: 1.55;
+      background: white;
+    }
+    h1, h2, h3 { margin: 0 0 8px; line-height: 1.25; }
+    h1 { font-size: 28px; }
+    h2 { font-size: 19px; padding-top: 10px; border-bottom: 1px solid #c9ced6; padding-bottom: 4px; }
+    h3 { font-size: 14px; margin-top: 12px; color: #2e4a62; }
+    p { margin: 6px 0 9px; }
+    ul { margin: 6px 0 10px 18px; padding: 0; }
+    li { margin: 2px 0; }
+    code { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; background: #f3f4f6; padding: 1px 4px; border-radius: 3px; }
+    pre { background: #f5f7fa; border: 1px solid #d6dbe3; padding: 9px; white-space: pre-wrap; font-size: 10.5px; border-radius: 5px; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 11.2px; }
+    th, td { border: 1px solid #cfd5dd; padding: 5px 6px; vertical-align: top; }
+    th { background: #eef2f7; text-align: left; }
+    .cover { page-break-after: always; padding-top: 18mm; }
+    .cover-card { border: 1.4px solid #202936; padding: 22px 24px; min-height: 210px; }
+    .subtitle { color: #425466; font-size: 15px; margin-top: 8px; }
+    .meta { margin-top: 22px; display: grid; grid-template-columns: 135px 1fr; gap: 4px 12px; font-size: 12.5px; }
+    .badge { display: inline-block; background: #e8f2ff; border: 1px solid #b8d8ff; color: #123a60; padding: 2px 7px; border-radius: 999px; margin: 2px 3px 2px 0; font-size: 11px; }
+    .callout { border-left: 4px solid #2d7ff9; background: #f4f8ff; padding: 8px 10px; margin: 10px 0; }
+    .warn { border-left-color: #c77900; background: #fff7e8; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
+    .figure { margin: 10px 0 14px; page-break-inside: avoid; }
+    .figure img { width: 100%; border: 1px solid #cfd5dd; display: block; }
+    .caption { font-size: 10.8px; color: #536170; margin-top: 4px; }
+    .page-break { page-break-before: always; }
+    .small { font-size: 10.6px; color: #596675; }
+    .metric-table td:first-child { width: 34%; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="cover-card">
+      <h1>RGB Social Navigation BEV 任務報告</h1>
+      <div class="subtitle">CPU-only 單目 RGB 社會導航感知、BEV 投影與風險可視化</div>
+      <div style="margin-top:18px;">
+        <span class="badge">SegFormer walkable segmentation</span>
+        <span class="badge">YOLO11 object detection</span>
+        <span class="badge">Kalman + Hungarian tracking</span>
+        <span class="badge">Homography / IPM BEV</span>
+        <span class="badge">Occupancy grid</span>
+      </div>
+      <div class="meta">
+        <div>實驗影片</div><div><code>data/15659193_3840_2160_60fps.mp4</code></div>
+        <div>影片規格</div><div>3840 x 2160, 約 59.94 FPS, 763 frames</div>
+        <div>執行方式</div><div>以指定影片抽樣推論，產生實際辨識結果圖與處理時間統計</div>
+        <div>輸出檔案</div><div><code>reports/rgb_social_navigation_bev_report.pdf</code></div>
+      </div>
+    </div>
+    <div style="margin-top:28px;">
+      <h2>摘要</h2>
+      <p>本任務建立並驗證一套以單目 RGB 影像為輸入的社會導航 BEV 感知系統。系統能從影片或即時相機逐幀讀取 RGB frame，進行可行走區域分割、人員與障礙物偵測、多人追蹤、未知障礙物估測，最後透過 homography / IPM 投影至鳥瞰圖，輸出 social zone、occupancy grid、2x2 視覺化影片與逐幀 JSONL 結果。</p>
+      <p>本報告使用 <code>data/15659193_3840_2160_60fps.mp4</code> 進行抽樣測試。由於目前未提供實際場地校正檔，BEV 結果以非公尺尺度顯示；若要量測實際距離與 social zone 半徑，需先建立 <code>configs/calibration.yaml</code>。</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>1. 任務目標與使用情境</h2>
+    <p>此系統的目標不是取代深度相機或 LiDAR，而是在只有 RGB 相機的條件下，提供社會導航所需的環境理解與風險可視化資訊。主要使用情境包含：</p>
+    <ul>
+      <li>從即時相機或影片取得 RGB 影像，線上逐幀推論，不需要先離線處理整支影片。</li>
+      <li>標示行人位置、追蹤 ID、行人移動軌跡與周圍 social safety zone。</li>
+      <li>把前視角感知結果投影成 BEV occupancy grid，供導航、人機互動或報告分析使用。</li>
+      <li>輸出 2x2 視覺化影片、JSONL 結果與 NPY/PNG occupancy grid。</li>
+    </ul>
+    <div class="callout warn">
+      <strong>安全定位：</strong>此系統是 perception / risk visualization 工具，不是安全認證控制器。單目 RGB 無法直接取得真實深度，未知障礙物也是低信心 RGB 估測，不應直接作為機器人安全停機邏輯。
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 系統架構</h2>
+    <p>系統由輸入層、runtime 控制、CPU perception pipeline、BEV 投影與輸出層構成。GUI 提供 Start / Pause / Stop 與 realtime playback；Pause 會在下一張 frame 進入推論前停住，因此不會繼續累積離線預算。</p>
+    <div class="figure">
+      <img src="assets/architecture_overview.png" alt="System architecture">
+      <div class="caption">圖 1. RGB Social Navigation BEV 系統架構。</div>
+    </div>
+    <h3>核心模組</h3>
+    <table>
+      <tr><th>模組</th><th>功能</th><th>實作檔案</th></tr>
+      <tr><td>FrameSource</td><td>支援 webcam、影片、圖片資料夾與單張圖片；OpenCV 讀取失敗時可用 ffmpeg fallback。</td><td><code>social_bev/frame_source.py</code></td></tr>
+      <tr><td>WalkableSegmenter</td><td>使用 SegFormer 產生可行走區域 mask，模型失敗時可退回 RGB heuristic。</td><td><code>social_bev/segmentation.py</code></td></tr>
+      <tr><td>ObjectDetector</td><td>使用 YOLO11 偵測 person 與已知障礙物；無 OpenVINO IR 時使用 <code>yolo11n.pt</code> CPU fallback。</td><td><code>social_bev/detection.py</code></td></tr>
+      <tr><td>MultiObjectTracker</td><td>以 Kalman filter 與 Hungarian matching 維持 person track ID 與短期軌跡。</td><td><code>social_bev/tracking.py</code></td></tr>
+      <tr><td>BEVMapBuilder</td><td>整合 walkable mask、obstacle、track 與 social zone，產生 BEV image 與 occupancy grid。</td><td><code>social_bev/bev_map.py</code></td></tr>
+    </table>
+  </section>
+
+  <section class="page-break">
+    <h2>3. 實驗設定</h2>
+    <table class="metric-table">
+      <tr><td>輸入影片</td><td><code>data/15659193_3840_2160_60fps.mp4</code></td></tr>
+      <tr><td>影片解析度 / FPS</td><td>3840 x 2160 / 59.94 FPS</td></tr>
+      <tr><td>抽樣方式</td><td>每 60 frames 取 1 frame，共處理 8 個 sample。</td></tr>
+      <tr><td>Pipeline input size</td><td>640 x 360</td></tr>
+      <tr><td>Segmentation</td><td>torch backend, SegFormer ADE20K</td></tr>
+      <tr><td>Detection</td><td>openvino configured; runtime fallback to <code>yolo11n.pt</code> because OpenVINO YOLO IR is not present.</td></tr>
+      <tr><td>Seg / Det interval</td><td>segmentation interval = 2, detection interval = 2</td></tr>
+      <tr><td>Calibration</td><td>未提供 calibration YAML，因此使用 NON-METRIC BEV。</td></tr>
+    </table>
+    <p class="small">說明：抽樣測試用於產生代表性報告圖與效能數據。若完整處理 763 frames，CPU 環境會耗費較長時間，且不代表即時相機的低延遲設定。</p>
+  </section>
+
+  <section>
+    <h2>4. 實際辨識結果</h2>
+    <p>以下圖片由指定影片實際執行 pipeline 取得。2x2 視覺化依序包含：原圖偵測與 track ID、walkable mask 疊圖、障礙物/ground contact、BEV occupancy 與 social zone。</p>
+    <div class="figure">
+      <img src="assets/sample_01_visualization.jpg" alt="Sample 1 visualization">
+      <div class="caption">圖 2. Sample 1 的 2x2 pipeline visualization。</div>
+    </div>
+    <div class="figure">
+      <img src="assets/sample_08_visualization.jpg" alt="Sample 8 visualization">
+      <div class="caption">圖 3. Sample 8 的 2x2 pipeline visualization。</div>
+    </div>
+    <div class="grid2">
+      <div class="figure">
+        <img src="assets/sample_08_bev.jpg" alt="BEV result">
+        <div class="caption">圖 4. Sample 8 的 BEV map 與 social zone。</div>
+      </div>
+      <div class="figure">
+        <img src="assets/sample_08_occupancy.png" alt="Occupancy result">
+        <div class="caption">圖 5. Sample 8 的 occupancy grid PNG preview。灰色代表 unknown。</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page-break">
+    <h2>5. 效能與數據分析</h2>
+    <table class="metric-table">
+      <tr><td>處理 sample 數</td><td>8</td></tr>
+      <tr><td>總 wall time</td><td>19.08 s</td></tr>
+      <tr><td>Wall average FPS</td><td>0.419 FPS，包含模型初始化與抽樣 decode。</td></tr>
+      <tr><td>Mean processing time</td><td>1153.5 ms/frame</td></tr>
+      <tr><td>Median processing time</td><td>346.7 ms/frame</td></tr>
+      <tr><td>Pipeline mean FPS</td><td>16.44 FPS，受 interval reuse 影響。</td></tr>
+      <tr><td>平均人員 track 數</td><td>5.00，最多 8</td></tr>
+      <tr><td>平均 unknown obstacle 數</td><td>1.25，最多 3</td></tr>
+      <tr><td>平均 walkable ratio</td><td>7.01%</td></tr>
+    </table>
+    <div class="grid2">
+      <div class="figure">
+        <img src="assets/timing_chart.png" alt="Timing chart">
+        <div class="caption">圖 6. 各模組逐幀處理時間。第 0 frame 包含模型載入與 warm-up，因此較高。</div>
+      </div>
+      <div class="figure">
+        <img src="assets/count_chart.png" alt="Count chart">
+        <div class="caption">圖 7. 每個 sample 的 people / known obstacle / unknown obstacle 數量。</div>
+      </div>
+    </div>
+    <table>
+      <tr><th>Frame</th><th>Time (s)</th><th>People tracks</th><th>Known obs.</th><th>Unknown obs.</th><th>Walkable</th><th>Total ms</th><th>FPS</th></tr>
+      
+      <tr>
+        <td>0</td>
+        <td>0.00</td>
+        <td>7</td>
+        <td>1</td>
+        <td>3</td>
+        <td>3.3%</td>
+        <td>7042.5</td>
+        <td>0.14</td>
+      </tr>
+    
+
+      <tr>
+        <td>1</td>
+        <td>1.00</td>
+        <td>0</td>
+        <td>1</td>
+        <td>3</td>
+        <td>3.3%</td>
+        <td>28.6</td>
+        <td>34.91</td>
+      </tr>
+    
+
+      <tr>
+        <td>2</td>
+        <td>2.00</td>
+        <td>8</td>
+        <td>0</td>
+        <td>1</td>
+        <td>3.3%</td>
+        <td>656.8</td>
+        <td>1.52</td>
+      </tr>
+    
+
+      <tr>
+        <td>3</td>
+        <td>3.00</td>
+        <td>0</td>
+        <td>0</td>
+        <td>1</td>
+        <td>3.3%</td>
+        <td>31.1</td>
+        <td>32.20</td>
+      </tr>
+    
+
+      <tr>
+        <td>4</td>
+        <td>4.00</td>
+        <td>6</td>
+        <td>0</td>
+        <td>0</td>
+        <td>9.3%</td>
+        <td>737.0</td>
+        <td>1.36</td>
+      </tr>
+    
+
+      <tr>
+        <td>5</td>
+        <td>5.00</td>
+        <td>5</td>
+        <td>0</td>
+        <td>0</td>
+        <td>9.3%</td>
+        <td>30.7</td>
+        <td>32.53</td>
+      </tr>
+    
+
+      <tr>
+        <td>6</td>
+        <td>6.01</td>
+        <td>8</td>
+        <td>1</td>
+        <td>1</td>
+        <td>12.1%</td>
+        <td>664.6</td>
+        <td>1.50</td>
+      </tr>
+    
+
+      <tr>
+        <td>7</td>
+        <td>7.01</td>
+        <td>6</td>
+        <td>1</td>
+        <td>1</td>
+        <td>12.1%</td>
+        <td>36.5</td>
+        <td>27.39</td>
+      </tr>
+    
+    </table>
+    <div class="callout">
+      <strong>Realtime 判讀：</strong>系統架構是線上逐幀處理，可直接接 webcam；但 CPU SegFormer + YOLO 不保證達到 60 FPS。若用於即時相機，建議採用較小 input size、提高 segmentation/detection interval、匯出 OpenVINO 模型，並加入 latest-frame mode 以丟棄過期 frame，避免累積延遲。
+    </div>
+  </section>
+
+  <section>
+    <h2>6. Occupancy Grid 與輸出格式</h2>
+    <table>
+      <tr><th>數值</th><th>語意</th><th>用途</th></tr>
+      <tr><td>-1</td><td>unknown</td><td>RGB 無法確認或未投影區域。</td></tr>
+      <tr><td>0</td><td>free</td><td>由 walkable mask 投影得到的可行走區域。</td></tr>
+      <tr><td>50</td><td>social caution</td><td>行人周圍 social zone，導航應提高避讓權重。</td></tr>
+      <tr><td>80</td><td>unknown obstacle</td><td>低信心 RGB 未知障礙物估測。</td></tr>
+      <tr><td>100</td><td>occupied</td><td>人、已知障礙物或 robot footprint。</td></tr>
+    </table>
+    <p>主要輸出包含 <code>outputs/*.mp4</code> 2x2 視覺化影片、<code>outputs/*.jsonl</code> 逐幀結構化資料，以及 <code>outputs/*_occupancy/frame_*.npy/.png</code> 的 occupancy grid。</p>
+  </section>
+
+  <section>
+    <h2>7. 限制與改善方向</h2>
+    <ul>
+      <li><strong>單目 RGB 無真實深度：</strong>BEV 投影依賴 ground-plane homography；非平面地面、坡度、懸空物體與遮擋會造成位置誤差。</li>
+      <li><strong>未校正時不具公尺尺度：</strong>本次未提供 calibration YAML，因此 social zone 是 normalized pixel zone。若要估算實際距離，需使用 <code>tools/calibrate_ipm.py</code> 完成場地校正。</li>
+      <li><strong>未知障礙物為低信心估測：</strong>目前由非 walkable 區域與 corridor heuristic 推出，可能受陰影、行人遮擋與地面材質影響。</li>
+      <li><strong>CPU 即時性有限：</strong>本系統可接即時相機，但不保證等於相機原生 FPS。實務上應以低延遲為目標，必要時跳 frame 或只保留最新 frame。</li>
+      <li><strong>模型加速：</strong>建議匯出 YOLO 與 SegFormer OpenVINO IR，並調整 <code>input_width/input_height</code>、<code>segmentation_interval</code>、<code>detection_interval</code>。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>8. 執行指令</h2>
+    <h3>GUI 一鍵啟動</h3>
+    <pre>cd /home/laiting/Desktop/NTHU_HRC_lab/itri_safty_descision/rgb_social_navigation_bev
+python gui.py</pre>
+    <h3>指定影片 CLI</h3>
+    <pre>cd /home/laiting/Desktop/NTHU_HRC_lab/itri_safty_descision/rgb_social_navigation_bev
+python -m social_bev.run   --input data/15659193_3840_2160_60fps.mp4   --config configs/default.yaml   --output outputs/real_social_navigation_result.mp4   --jsonl outputs/real_social_navigation_results.jsonl   --occupancy-dir outputs/real_social_navigation_occupancy   --device cpu</pre>
+    <h3>即時相機</h3>
+    <pre>python -m social_bev.run   --input 0   --config configs/default.yaml   --output outputs/webcam_social_bev.mp4   --jsonl outputs/webcam_social_bev.jsonl   --occupancy-dir outputs/webcam_social_bev_occupancy   --device cpu</pre>
+  </section>
+
+  <section>
+    <h2>9. 結論</h2>
+    <p>本系統已完成從 RGB frame source 到 social navigation BEV visualization 的端到端流程，能在 CPU 環境下對真實人群影片進行 walkable segmentation、person detection/tracking、unknown obstacle estimation、BEV occupancy rendering 與 JSONL/影片輸出。實驗結果顯示系統可線上逐幀運作並產生可檢視的社會導航風險圖，但若要部署於即時機器人，需要進一步完成 metric calibration、模型加速與 latest-frame 低延遲策略。</p>
+  </section>
+</body>
+</html>

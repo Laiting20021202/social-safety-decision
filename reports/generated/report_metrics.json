@@ -1,0 +1,2263 @@
+{
+  "summary": {
+    "video": "data/15659193_3840_2160_60fps.mp4",
+    "video_exists": true,
+    "sampling_stride": 60,
+    "samples_processed": 8,
+    "wall_time_s": 19.077943971999957,
+    "pipeline_average_fps_reported": 16.445,
+    "wall_average_fps": 0.41933239827841645,
+    "mean_processing_ms": 1153.4828750000001,
+    "median_processing_ms": 346.6585,
+    "mean_fps": 16.44475,
+    "mean_people_tracks": 5,
+    "max_people_tracks": 8,
+    "mean_unknown_obstacles": 1.25,
+    "max_unknown_obstacles": 3,
+    "mean_walkable_ratio": 0.0700954869389534,
+    "metric_bev": false,
+    "model_config": {
+      "input_width": 640,
+      "input_height": 360,
+      "segmentation_interval": 2,
+      "detection_interval": 2,
+      "segmentation_backend": "torch",
+      "detection_backend": "openvino",
+      "detector_fallback_model": "yolo11n.pt"
+    }
+  },
+  "records": [
+    {
+      "frame_index": 0,
+      "timestamp": 0.0,
+      "metric_bev": false,
+      "people": [
+        {
+          "track_id": 1,
+          "bbox": [
+            560.39,
+            152.594,
+            613.781,
+            286.901
+          ],
+          "confidence": 0.8214,
+          "image_ground_point": [
+            587.0,
+            287.0
+          ],
+          "bev_position": [
+            651.121,
+            681.578
+          ],
+          "velocity": [
+            0.0,
+            0.0
+          ],
+          "age": 1,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              651.121,
+              681.578
+            ]
+          ]
+        },
+        {
+          "track_id": 2,
+          "bbox": [
+            340.78,
+            123.079,
+            410.2,
+            355.507
+          ],
+          "confidence": 0.7662,
+          "image_ground_point": [
+            365.0,
+            358.0
+          ],
+          "bev_position": [
+            345.532,
+            806.208
+          ],
+          "velocity": [
+            0.0,
+            0.0
+          ],
+          "age": 1,
+          "missed_frames": 0,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              345.532,
+              806.208
+            ]
+          ]
+        },
+        {
+          "track_id": 3,
+          "bbox": [
+            210.804,
+            148.9,
+            268.295,
+            331.385
+          ],
+          "confidence": 0.7604,
+          "image_ground_point": [
+            241.0,
+            331.0
+          ],
+          "bev_position": [
+            211.192,
+            765.979
+          ],
+          "velocity": [
+            0.0,
+            0.0
+          ],
+          "age": 1,
+          "missed_frames": 0,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              211.192,
+              765.979
+            ]
+          ]
+        },
+        {
+          "track_id": 4,
+          "bbox": [
+            152.845,
+            139.085,
+            224.555,
+            332.996
+          ],
+          "confidence": 0.7288,
+          "image_ground_point": [
+            189.0,
+            333.0
+          ],
+          "bev_position": [
+            154.064,
+            769.213
+          ],
+          "velocity": [
+            0.0,
+            0.0
+          ],
+          "age": 1,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              154.064,
+              769.213
+            ]
+          ]
+        },
+        {
+          "track_id": 5,
+          "bbox": [
+            411.963,
+            161.097,
+            444.5,
+            269.922
+          ],
+          "confidence": 0.6599,
+          "image_ground_point": [
+            428.0,
+            270.0
+          ],
+          "bev_position": [
+            452.24,
+            640.321
+          ],
+          "velocity": [
+            0.0,
+            0.0
+          ],
+          "age": 1,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              452.24,
+              640.321
+            ]
+          ]
+        },
+        {
+          "track_id": 6,
+          "bbox": [
+            297.944,
+            167.636,
+            345.635,
+            296.999
+          ],
+          "confidence": 0.5207,
+          "image_ground_point": [
+            318.0,
+            301.0
+          ],
+          "bev_position": [
+            297.007,
+            711.519
+          ],
+          "velocity": [
+            0.0,
+            0.0
+          ],
+          "age": 1,
+          "missed_frames": 0,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              297.007,
+              711.519
+            ]
+          ]
+        },
+        {
+          "track_id": 7,
+          "bbox": [
+            0.224,
+            178.056,
+            34.447,
+            356.519
+          ],
+          "confidence": 0.5166,
+          "image_ground_point": [
+            17.0,
+            357.0
+          ],
+          "bev_position": [
+            -11.424,
+            804.84
+          ],
+          "velocity": [
+            0.0,
+            0.0
+          ],
+          "age": 1,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              -11.424,
+              804.84
+            ]
+          ]
+        }
+      ],
+      "known_obstacles": [
+        {
+          "bbox": [
+            248.933,
+            240.095,
+            272.624,
+            292.435
+          ],
+          "confidence": 0.4725,
+          "class_id": 26,
+          "class_name": "handbag",
+          "category": "known_obstacle",
+          "ground_point": [
+            260.779,
+            292.435
+          ]
+        }
+      ],
+      "unknown_obstacles": [
+        {
+          "bbox": [
+            271.0,
+            136.0,
+            336.0,
+            270.0
+          ],
+          "confidence": 0.35,
+          "label": "unknown_obstacle",
+          "category": "unknown_obstacle",
+          "ground_points": [
+            [
+              276.0,
+              267.0
+            ],
+            [
+              279.0,
+              268.0
+            ],
+            [
+              283.0,
+              267.0
+            ]
+          ],
+          "bev_points": [
+            [
+              236.45,
+              632.399
+            ],
+            [
+              241.007,
+              635.063
+            ],
+            [
+              246.481,
+              632.399
+            ]
+          ],
+          "note": "RGB estimate"
+        },
+        {
+          "bbox": [
+            414.0,
+            136.0,
+            454.0,
+            360.0
+          ],
+          "confidence": 0.35,
+          "label": "unknown_obstacle",
+          "category": "unknown_obstacle",
+          "ground_points": [
+            [
+              414.0,
+              359.0
+            ],
+            [
+              414.0,
+              359.0
+            ],
+            [
+              453.0,
+              359.0
+            ]
+          ],
+          "bev_points": [
+            [
+              395.354,
+              807.567
+            ],
+            [
+              395.354,
+              807.567
+            ],
+            [
+              435.123,
+              807.567
+            ]
+          ],
+          "note": "RGB estimate"
+        },
+        {
+          "bbox": [
+            186.0,
+            345.0,
+            244.0,
+            360.0
+          ],
+          "confidence": 0.35,
+          "label": "unknown_obstacle",
+          "category": "unknown_obstacle",
+          "ground_points": [
+            [
+              186.0,
+              359.0
+            ],
+            [
+              186.0,
+              359.0
+            ],
+            [
+              243.0,
+              359.0
+            ]
+          ],
+          "bev_points": [
+            [
+              162.857,
+              807.567
+            ],
+            [
+              162.857,
+              807.567
+            ],
+            [
+              220.982,
+              807.567
+            ]
+          ],
+          "note": "RGB estimate"
+        }
+      ],
+      "processing_ms": {
+        "segmentation": 6712.88,
+        "detection": 301.029,
+        "tracking": 1.887,
+        "unknown_obstacles": 2.22,
+        "bev": 16.245,
+        "total": 7042.502
+      },
+      "fps": 0.142,
+      "average_fps": 0.142,
+      "source_frame_index": 0,
+      "source_timestamp": 0.0,
+      "detections_total": 8,
+      "tracks_total": 7,
+      "unknown_total": 3,
+      "walkable_ratio": 0.03311631828546524
+    },
+    {
+      "frame_index": 1,
+      "timestamp": 1.0010000000000001,
+      "metric_bev": false,
+      "people": [],
+      "known_obstacles": [
+        {
+          "bbox": [
+            248.933,
+            240.095,
+            272.624,
+            292.435
+          ],
+          "confidence": 0.4725,
+          "class_id": 26,
+          "class_name": "handbag",
+          "category": "known_obstacle",
+          "ground_point": [
+            260.779,
+            292.435
+          ]
+        }
+      ],
+      "unknown_obstacles": [
+        {
+          "bbox": [
+            271.0,
+            136.0,
+            336.0,
+            270.0
+          ],
+          "confidence": 0.35,
+          "label": "unknown_obstacle",
+          "category": "unknown_obstacle",
+          "ground_points": [
+            [
+              276.0,
+              267.0
+            ],
+            [
+              279.0,
+              268.0
+            ],
+            [
+              283.0,
+              267.0
+            ]
+          ],
+          "bev_points": [
+            [
+              236.45,
+              632.399
+            ],
+            [
+              241.007,
+              635.063
+            ],
+            [
+              246.481,
+              632.399
+            ]
+          ],
+          "note": "RGB estimate"
+        },
+        {
+          "bbox": [
+            414.0,
+            136.0,
+            454.0,
+            360.0
+          ],
+          "confidence": 0.35,
+          "label": "unknown_obstacle",
+          "category": "unknown_obstacle",
+          "ground_points": [
+            [
+              414.0,
+              359.0
+            ],
+            [
+              414.0,
+              359.0
+            ],
+            [
+              453.0,
+              359.0
+            ]
+          ],
+          "bev_points": [
+            [
+              395.354,
+              807.567
+            ],
+            [
+              395.354,
+              807.567
+            ],
+            [
+              435.123,
+              807.567
+            ]
+          ],
+          "note": "RGB estimate"
+        },
+        {
+          "bbox": [
+            186.0,
+            345.0,
+            244.0,
+            360.0
+          ],
+          "confidence": 0.35,
+          "label": "unknown_obstacle",
+          "category": "unknown_obstacle",
+          "ground_points": [
+            [
+              186.0,
+              359.0
+            ],
+            [
+              186.0,
+              359.0
+            ],
+            [
+              243.0,
+              359.0
+            ]
+          ],
+          "bev_points": [
+            [
+              162.857,
+              807.567
+            ],
+            [
+              162.857,
+              807.567
+            ],
+            [
+              220.982,
+              807.567
+            ]
+          ],
+          "note": "RGB estimate"
+        }
+      ],
+      "processing_ms": {
+        "segmentation": 0.0,
+        "detection": 0.0,
+        "tracking": 0.216,
+        "unknown_obstacles": 1.245,
+        "bev": 12.007,
+        "total": 28.649
+      },
+      "fps": 34.905,
+      "average_fps": 17.524,
+      "source_frame_index": 1,
+      "source_timestamp": 1.0010000000000001,
+      "detections_total": 8,
+      "tracks_total": 0,
+      "unknown_total": 3,
+      "walkable_ratio": 0.03311631828546524
+    },
+    {
+      "frame_index": 2,
+      "timestamp": 2.0020000000000002,
+      "metric_bev": false,
+      "people": [
+        {
+          "track_id": 1,
+          "bbox": [
+            532.092,
+            81.246,
+            639.551,
+            355.851
+          ],
+          "confidence": 0.9068,
+          "image_ground_point": [
+            586.0,
+            356.0
+          ],
+          "bev_position": [
+            573.321,
+            803.464
+          ],
+          "velocity": [
+            -0.63,
+            -0.598
+          ],
+          "age": 3,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              651.121,
+              681.578
+            ],
+            [
+              573.321,
+              803.464
+            ]
+          ]
+        },
+        {
+          "track_id": 2,
+          "bbox": [
+            342.658,
+            177.402,
+            369.144,
+            251.813
+          ],
+          "confidence": 0.4456,
+          "image_ground_point": [
+            356.0,
+            252.0
+          ],
+          "bev_position": [
+            354.736,
+            589.426
+          ],
+          "velocity": [
+            -9.77,
+            -12.312
+          ],
+          "age": 3,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              345.532,
+              806.208
+            ],
+            [
+              354.736,
+              589.426
+            ]
+          ]
+        },
+        {
+          "track_id": 3,
+          "bbox": [
+            189.906,
+            151.631,
+            234.397,
+            326.6
+          ],
+          "confidence": 0.5603,
+          "image_ground_point": [
+            212.0,
+            327.0
+          ],
+          "bev_position": [
+            177.092,
+            759.375
+          ],
+          "velocity": [
+            -13.665,
+            -0.512
+          ],
+          "age": 3,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              211.192,
+              765.979
+            ],
+            [
+              177.092,
+              759.375
+            ]
+          ]
+        },
+        {
+          "track_id": 4,
+          "bbox": [
+            131.92,
+            144.673,
+            201.164,
+            350.631
+          ],
+          "confidence": 0.7979,
+          "image_ground_point": [
+            167.0,
+            351.0
+          ],
+          "bev_position": [
+            139.47,
+            796.449
+          ],
+          "velocity": [
+            -11.051,
+            5.791
+          ],
+          "age": 3,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              154.064,
+              769.213
+            ],
+            [
+              139.47,
+              796.449
+            ]
+          ]
+        },
+        {
+          "track_id": 6,
+          "bbox": [
+            223.343,
+            117.583,
+            316.584,
+            358.682
+          ],
+          "confidence": 0.8653,
+          "image_ground_point": [
+            270.0,
+            359.0
+          ],
+          "bev_position": [
+            248.514,
+            807.567
+          ],
+          "velocity": [
+            -25.849,
+            2.9
+          ],
+          "age": 3,
+          "missed_frames": 0,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              297.007,
+              711.519
+            ],
+            [
+              248.514,
+              807.567
+            ]
+          ]
+        },
+        {
+          "track_id": 7,
+          "bbox": [
+            48.16,
+            175.518,
+            80.571,
+            257.495
+          ],
+          "confidence": 0.7284,
+          "image_ground_point": [
+            64.0,
+            257.0
+          ],
+          "bev_position": [
+            -84.238,
+            604.411
+          ],
+          "velocity": [
+            23.457,
+            -25.328
+          ],
+          "age": 3,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              -11.424,
+              804.84
+            ],
+            [
+              -84.238,
+              604.411
+            ]
+          ]
+        },
+        {
+          "track_id": 8,
+          "bbox": [
+            111.793,
+            173.216,
+            138.903,
+            256.807
+          ],
+          "confidence": 0.4645,
+          "image_ground_point": [
+            125.0,
+            257.0
+          ],
+          "bev_position": [
+            7.2,
+            604.411
+          ],
+          "velocity": [
+            0.0,
+            0.0
+          ],
+          "age": 1,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              7.2,
+              604.411
+            ]
+          ]
+        },
+        {
+          "track_id": 9,
+          "bbox": [
+            86.944,
+            175.776,
+            116.522,
+            257.883
+          ],
+          "confidence": 0.4622,
+          "image_ground_point": [
+            102.0,
+            258.0
+          ],
+          "bev_position": [
+            -25.778,
+            607.325
+          ],
+          "velocity": [
+            0.0,
+            0.0
+          ],
+          "age": 1,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              -25.778,
+              607.325
+            ]
+          ]
+        }
+      ],
+      "known_obstacles": [],
+      "unknown_obstacles": [
+        {
+          "bbox": [
+            322.0,
+            136.0,
+            454.0,
+            360.0
+          ],
+          "confidence": 0.35,
+          "label": "unknown_obstacle",
+          "category": "unknown_obstacle",
+          "ground_points": [
+            [
+              366.0,
+              358.0
+            ],
+            [
+              366.0,
+              358.0
+            ],
+            [
+              453.0,
+              359.0
+            ]
+          ],
+          "bev_points": [
+            [
+              346.555,
+              806.208
+            ],
+            [
+              346.555,
+              806.208
+            ],
+            [
+              435.123,
+              807.567
+            ]
+          ],
+          "note": "RGB estimate"
+        }
+      ],
+      "processing_ms": {
+        "segmentation": 581.107,
+        "detection": 35.986,
+        "tracking": 2.572,
+        "unknown_obstacles": 1.451,
+        "bev": 13.789,
+        "total": 656.809
+      },
+      "fps": 1.523,
+      "average_fps": 12.19,
+      "source_frame_index": 2,
+      "source_timestamp": 2.0020000000000002,
+      "detections_total": 8,
+      "tracks_total": 8,
+      "unknown_total": 1,
+      "walkable_ratio": 0.03311631828546524
+    },
+    {
+      "frame_index": 3,
+      "timestamp": 3.003,
+      "metric_bev": false,
+      "people": [],
+      "known_obstacles": [],
+      "unknown_obstacles": [
+        {
+          "bbox": [
+            322.0,
+            136.0,
+            454.0,
+            360.0
+          ],
+          "confidence": 0.35,
+          "label": "unknown_obstacle",
+          "category": "unknown_obstacle",
+          "ground_points": [
+            [
+              366.0,
+              358.0
+            ],
+            [
+              366.0,
+              358.0
+            ],
+            [
+              453.0,
+              359.0
+            ]
+          ],
+          "bev_points": [
+            [
+              346.555,
+              806.208
+            ],
+            [
+              346.555,
+              806.208
+            ],
+            [
+              435.123,
+              807.567
+            ]
+          ],
+          "note": "RGB estimate"
+        }
+      ],
+      "processing_ms": {
+        "segmentation": 0.0,
+        "detection": 0.0,
+        "tracking": 0.414,
+        "unknown_obstacles": 1.652,
+        "bev": 13.34,
+        "total": 31.054
+      },
+      "fps": 32.202,
+      "average_fps": 17.193,
+      "source_frame_index": 3,
+      "source_timestamp": 3.003,
+      "detections_total": 8,
+      "tracks_total": 0,
+      "unknown_total": 1,
+      "walkable_ratio": 0.03311631828546524
+    },
+    {
+      "frame_index": 4,
+      "timestamp": 4.0040000000000004,
+      "metric_bev": false,
+      "people": [
+        {
+          "track_id": 1,
+          "bbox": [
+            561.046,
+            141.042,
+            629.24,
+            317.004
+          ],
+          "confidence": 0.7304,
+          "image_ground_point": [
+            595.0,
+            317.0
+          ],
+          "bev_position": [
+            622.438,
+            742.032
+          ],
+          "velocity": [
+            3.862,
+            4.356
+          ],
+          "age": 5,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              651.121,
+              681.578
+            ],
+            [
+              573.321,
+              803.464
+            ],
+            [
+              622.438,
+              742.032
+            ]
+          ]
+        },
+        {
+          "track_id": 2,
+          "bbox": [
+            316.077,
+            142.426,
+            386.694,
+            309.836
+          ],
+          "confidence": 0.8747,
+          "image_ground_point": [
+            351.0,
+            310.0
+          ],
+          "bev_position": [
+            336.848,
+            729.128
+          ],
+          "velocity": [
+            -3.385,
+            3.041
+          ],
+          "age": 5,
+          "missed_frames": 0,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              345.532,
+              806.208
+            ],
+            [
+              354.736,
+              589.426
+            ],
+            [
+              336.848,
+              729.128
+            ]
+          ]
+        },
+        {
+          "track_id": 3,
+          "bbox": [
+            157.749,
+            146.571,
+            225.322,
+            355.119
+          ],
+          "confidence": 0.7911,
+          "image_ground_point": [
+            192.0,
+            355.0
+          ],
+          "bev_position": [
+            167.318,
+            802.079
+          ],
+          "velocity": [
+            -10.804,
+            4.901
+          ],
+          "age": 5,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              211.192,
+              765.979
+            ],
+            [
+              177.092,
+              759.375
+            ],
+            [
+              167.318,
+              802.079
+            ]
+          ]
+        },
+        {
+          "track_id": 4,
+          "bbox": [
+            97.24,
+            141.669,
+            179.596,
+            357.337
+          ],
+          "confidence": 0.7154,
+          "image_ground_point": [
+            138.0,
+            357.0
+          ],
+          "bev_position": [
+            112.74,
+            804.84
+          ],
+          "velocity": [
+            -13.598,
+            1.656
+          ],
+          "age": 5,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              154.064,
+              769.213
+            ],
+            [
+              139.47,
+              796.449
+            ],
+            [
+              112.74,
+              804.84
+            ]
+          ]
+        },
+        {
+          "track_id": 6,
+          "bbox": [
+            217.995,
+            114.074,
+            312.984,
+            365.199
+          ],
+          "confidence": 0.8551,
+          "image_ground_point": [
+            265.0,
+            359.0
+          ],
+          "bev_position": [
+            243.415,
+            807.567
+          ],
+          "velocity": [
+            -5.784,
+            1.074
+          ],
+          "age": 5,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              297.007,
+              711.519
+            ],
+            [
+              248.514,
+              807.567
+            ],
+            [
+              243.415,
+              807.567
+            ]
+          ]
+        },
+        {
+          "track_id": 9,
+          "bbox": [
+            43.684,
+            161.42,
+            87.693,
+            282.911
+          ],
+          "confidence": 0.5624,
+          "image_ground_point": [
+            66.0,
+            283.0
+          ],
+          "bev_position": [
+            -40.507,
+            672.39
+          ],
+          "velocity": [
+            -17.977,
+            2.661
+          ],
+          "age": 3,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              -25.778,
+              607.325
+            ],
+            [
+              -40.507,
+              672.39
+            ]
+          ]
+        }
+      ],
+      "known_obstacles": [],
+      "unknown_obstacles": [],
+      "processing_ms": {
+        "segmentation": 659.907,
+        "detection": 38.485,
+        "tracking": 2.525,
+        "unknown_obstacles": 1.214,
+        "bev": 12.104,
+        "total": 736.991
+      },
+      "fps": 1.357,
+      "average_fps": 14.026,
+      "source_frame_index": 4,
+      "source_timestamp": 4.0040000000000004,
+      "detections_total": 7,
+      "tracks_total": 6,
+      "unknown_total": 0,
+      "walkable_ratio": 0.09324219077825546
+    },
+    {
+      "frame_index": 5,
+      "timestamp": 5.005,
+      "metric_bev": false,
+      "people": [
+        {
+          "track_id": 1,
+          "bbox": [
+            571.224,
+            161.094,
+            626.793,
+            305.673
+          ],
+          "confidence": 0.7304,
+          "image_ground_point": [
+            599.0,
+            306.0
+          ],
+          "bev_position": [
+            640.683,
+            721.449
+          ],
+          "velocity": [
+            3.862,
+            4.356
+          ],
+          "age": 6,
+          "missed_frames": 1,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              651.121,
+              681.578
+            ],
+            [
+              573.321,
+              803.464
+            ],
+            [
+              622.438,
+              742.032
+            ],
+            [
+              640.683,
+              721.449
+            ]
+          ]
+        },
+        {
+          "track_id": 2,
+          "bbox": [
+            304.925,
+            131.642,
+            391.07,
+            326.708
+          ],
+          "confidence": 0.8747,
+          "image_ground_point": [
+            348.0,
+            327.0
+          ],
+          "bev_position": [
+            331.235,
+            759.375
+          ],
+          "velocity": [
+            -3.385,
+            3.041
+          ],
+          "age": 6,
+          "missed_frames": 1,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              345.532,
+              806.208
+            ],
+            [
+              354.736,
+              589.426
+            ],
+            [
+              336.848,
+              729.128
+            ],
+            [
+              331.235,
+              759.375
+            ]
+          ]
+        },
+        {
+          "track_id": 3,
+          "bbox": [
+            142.519,
+            144.626,
+            218.922,
+            366.877
+          ],
+          "confidence": 0.7911,
+          "image_ground_point": [
+            181.0,
+            359.0
+          ],
+          "bev_position": [
+            157.759,
+            807.567
+          ],
+          "velocity": [
+            -10.804,
+            4.901
+          ],
+          "age": 6,
+          "missed_frames": 1,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              211.192,
+              765.979
+            ],
+            [
+              177.092,
+              759.375
+            ],
+            [
+              167.318,
+              802.079
+            ],
+            [
+              157.759,
+              807.567
+            ]
+          ]
+        },
+        {
+          "track_id": 4,
+          "bbox": [
+            80.936,
+            140.811,
+            168.677,
+            361.509
+          ],
+          "confidence": 0.7154,
+          "image_ground_point": [
+            125.0,
+            359.0
+          ],
+          "bev_position": [
+            100.655,
+            807.567
+          ],
+          "velocity": [
+            -13.598,
+            1.656
+          ],
+          "age": 6,
+          "missed_frames": 1,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              154.064,
+              769.213
+            ],
+            [
+              139.47,
+              796.449
+            ],
+            [
+              112.74,
+              804.84
+            ],
+            [
+              100.655,
+              807.567
+            ]
+          ]
+        },
+        {
+          "track_id": 6,
+          "bbox": [
+            210.125,
+            108.827,
+            309.275,
+            372.596
+          ],
+          "confidence": 0.8551,
+          "image_ground_point": [
+            260.0,
+            359.0
+          ],
+          "bev_position": [
+            238.317,
+            807.567
+          ],
+          "velocity": [
+            -5.784,
+            1.074
+          ],
+          "age": 6,
+          "missed_frames": 1,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              297.007,
+              711.519
+            ],
+            [
+              248.514,
+              807.567
+            ],
+            [
+              243.415,
+              807.567
+            ],
+            [
+              238.317,
+              807.567
+            ]
+          ]
+        }
+      ],
+      "known_obstacles": [],
+      "unknown_obstacles": [],
+      "processing_ms": {
+        "segmentation": 0.0,
+        "detection": 0.0,
+        "tracking": 1.637,
+        "unknown_obstacles": 1.114,
+        "bev": 10.4,
+        "total": 30.738
+      },
+      "fps": 32.533,
+      "average_fps": 17.11,
+      "source_frame_index": 5,
+      "source_timestamp": 5.005,
+      "detections_total": 7,
+      "tracks_total": 5,
+      "unknown_total": 0,
+      "walkable_ratio": 0.09324219077825546
+    },
+    {
+      "frame_index": 6,
+      "timestamp": 6.006,
+      "metric_bev": false,
+      "people": [
+        {
+          "track_id": 1,
+          "bbox": [
+            587.666,
+            160.236,
+            638.186,
+            323.977
+          ],
+          "confidence": 0.7723,
+          "image_ground_point": [
+            613.0,
+            324.0
+          ],
+          "bev_position": [
+            635.096,
+            754.301
+          ],
+          "velocity": [
+            8.201,
+            6.239
+          ],
+          "age": 7,
+          "missed_frames": 0,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              651.121,
+              681.578
+            ],
+            [
+              573.321,
+              803.464
+            ],
+            [
+              622.438,
+              742.032
+            ],
+            [
+              640.683,
+              721.449
+            ],
+            [
+              635.096,
+              754.301
+            ]
+          ]
+        },
+        {
+          "track_id": 2,
+          "bbox": [
+            266.9,
+            124.742,
+            362.223,
+            357.74
+          ],
+          "confidence": 0.8795,
+          "image_ground_point": [
+            315.0,
+            358.0
+          ],
+          "bev_position": [
+            294.385,
+            806.208
+          ],
+          "velocity": [
+            -16.357,
+            6.936
+          ],
+          "age": 7,
+          "missed_frames": 0,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              345.532,
+              806.208
+            ],
+            [
+              354.736,
+              589.426
+            ],
+            [
+              336.848,
+              729.128
+            ],
+            [
+              331.235,
+              759.375
+            ],
+            [
+              294.385,
+              806.208
+            ]
+          ]
+        },
+        {
+          "track_id": 3,
+          "bbox": [
+            110.062,
+            140.746,
+            197.543,
+            360.287
+          ],
+          "confidence": 0.8065,
+          "image_ground_point": [
+            154.0,
+            359.0
+          ],
+          "bev_position": [
+            130.226,
+            807.567
+          ],
+          "velocity": [
+            -17.756,
+            0.523
+          ],
+          "age": 7,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              211.192,
+              765.979
+            ],
+            [
+              177.092,
+              759.375
+            ],
+            [
+              167.318,
+              802.079
+            ],
+            [
+              157.759,
+              807.567
+            ],
+            [
+              130.226,
+              807.567
+            ]
+          ]
+        },
+        {
+          "track_id": 4,
+          "bbox": [
+            64.632,
+            139.954,
+            157.758,
+            365.681
+          ],
+          "confidence": 0.7154,
+          "image_ground_point": [
+            111.0,
+            359.0
+          ],
+          "bev_position": [
+            86.378,
+            807.567
+          ],
+          "velocity": [
+            -13.598,
+            1.656
+          ],
+          "age": 7,
+          "missed_frames": 2,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              154.064,
+              769.213
+            ],
+            [
+              139.47,
+              796.449
+            ],
+            [
+              112.74,
+              804.84
+            ],
+            [
+              100.655,
+              807.567
+            ],
+            [
+              86.378,
+              807.567
+            ]
+          ]
+        },
+        {
+          "track_id": 5,
+          "bbox": [
+            412.773,
+            160.726,
+            477.903,
+            311.938
+          ],
+          "confidence": 0.8171,
+          "image_ground_point": [
+            450.0,
+            312.0
+          ],
+          "bev_position": [
+            454.968,
+            732.883
+          ],
+          "velocity": [
+            7.461,
+            1.501
+          ],
+          "age": 7,
+          "missed_frames": 0,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              452.24,
+              640.321
+            ],
+            [
+              454.968,
+              732.883
+            ]
+          ]
+        },
+        {
+          "track_id": 6,
+          "bbox": [
+            179.34,
+            144.674,
+            260.516,
+            361.034
+          ],
+          "confidence": 0.7787,
+          "image_ground_point": [
+            220.0,
+            359.0
+          ],
+          "bev_position": [
+            197.528,
+            807.567
+          ],
+          "velocity": [
+            -20.454,
+            5.852
+          ],
+          "age": 7,
+          "missed_frames": 0,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              297.007,
+              711.519
+            ],
+            [
+              248.514,
+              807.567
+            ],
+            [
+              243.415,
+              807.567
+            ],
+            [
+              238.317,
+              807.567
+            ],
+            [
+              197.528,
+              807.567
+            ]
+          ]
+        },
+        {
+          "track_id": 10,
+          "bbox": [
+            363.837,
+            172.666,
+            410.665,
+            301.798
+          ],
+          "confidence": 0.7781,
+          "image_ground_point": [
+            387.0,
+            302.0
+          ],
+          "bev_position": [
+            382.684,
+            713.536
+          ],
+          "velocity": [
+            0.0,
+            0.0
+          ],
+          "age": 1,
+          "missed_frames": 0,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              382.684,
+              713.536
+            ]
+          ]
+        },
+        {
+          "track_id": 11,
+          "bbox": [
+            571.403,
+            201.664,
+            593.138,
+            248.304
+          ],
+          "confidence": 0.3733,
+          "image_ground_point": [
+            580.0,
+            248.0
+          ],
+          "bev_position": [
+            706.095,
+            576.92
+          ],
+          "velocity": [
+            0.0,
+            0.0
+          ],
+          "age": 1,
+          "missed_frames": 0,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              706.095,
+              576.92
+            ]
+          ]
+        }
+      ],
+      "known_obstacles": [
+        {
+          "bbox": [
+            107.76,
+            275.852,
+            141.167,
+            359.185
+          ],
+          "confidence": 0.4509,
+          "class_id": 26,
+          "class_name": "handbag",
+          "category": "known_obstacle",
+          "ground_point": [
+            124.463,
+            359.185
+          ]
+        }
+      ],
+      "unknown_obstacles": [
+        {
+          "bbox": [
+            364.0,
+            136.0,
+            454.0,
+            162.0
+          ],
+          "confidence": 0.35,
+          "label": "unknown_obstacle",
+          "category": "unknown_obstacle",
+          "ground_points": [
+            [
+              364.0,
+              159.0
+            ],
+            [
+              367.0,
+              161.0
+            ],
+            [
+              410.0,
+              159.0
+            ]
+          ],
+          "bev_points": [
+            [
+              419.758,
+              81.247
+            ],
+            [
+              425.835,
+              100.393
+            ],
+            [
+              545.483,
+              81.247
+            ]
+          ],
+          "note": "RGB estimate"
+        }
+      ],
+      "processing_ms": {
+        "segmentation": 593.586,
+        "detection": 39.186,
+        "tracking": 1.978,
+        "unknown_obstacles": 1.191,
+        "bev": 12.759,
+        "total": 664.612
+      },
+      "fps": 1.505,
+      "average_fps": 14.881,
+      "source_frame_index": 6,
+      "source_timestamp": 6.006,
+      "detections_total": 8,
+      "tracks_total": 8,
+      "unknown_total": 1,
+      "walkable_ratio": 0.12090712040662766
+    },
+    {
+      "frame_index": 7,
+      "timestamp": 7.007000000000001,
+      "metric_bev": false,
+      "people": [
+        {
+          "track_id": 1,
+          "bbox": [
+            600.55,
+            171.252,
+            641.72,
+            325.452
+          ],
+          "confidence": 0.7723,
+          "image_ground_point": [
+            621.0,
+            325.0
+          ],
+          "bev_position": [
+            643.049,
+            756.004
+          ],
+          "velocity": [
+            8.201,
+            6.239
+          ],
+          "age": 8,
+          "missed_frames": 1,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              651.121,
+              681.578
+            ],
+            [
+              573.321,
+              803.464
+            ],
+            [
+              622.438,
+              742.032
+            ],
+            [
+              640.683,
+              721.449
+            ],
+            [
+              635.096,
+              754.301
+            ],
+            [
+              643.049,
+              756.004
+            ]
+          ]
+        },
+        {
+          "track_id": 2,
+          "bbox": [
+            244.135,
+            115.637,
+            352.242,
+            380.731
+          ],
+          "confidence": 0.8795,
+          "image_ground_point": [
+            298.0,
+            359.0
+          ],
+          "bev_position": [
+            277.066,
+            807.567
+          ],
+          "velocity": [
+            -16.357,
+            6.936
+          ],
+          "age": 8,
+          "missed_frames": 1,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              345.532,
+              806.208
+            ],
+            [
+              354.736,
+              589.426
+            ],
+            [
+              336.848,
+              729.128
+            ],
+            [
+              331.235,
+              759.375
+            ],
+            [
+              294.385,
+              806.208
+            ],
+            [
+              277.066,
+              807.567
+            ]
+          ]
+        },
+        {
+          "track_id": 3,
+          "bbox": [
+            87.387,
+            137.964,
+            184.67,
+            364.116
+          ],
+          "confidence": 0.8065,
+          "image_ground_point": [
+            136.0,
+            359.0
+          ],
+          "bev_position": [
+            111.871,
+            807.567
+          ],
+          "velocity": [
+            -17.756,
+            0.523
+          ],
+          "age": 8,
+          "missed_frames": 1,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              211.192,
+              765.979
+            ],
+            [
+              177.092,
+              759.375
+            ],
+            [
+              167.318,
+              802.079
+            ],
+            [
+              157.759,
+              807.567
+            ],
+            [
+              130.226,
+              807.567
+            ],
+            [
+              111.871,
+              807.567
+            ]
+          ]
+        },
+        {
+          "track_id": 4,
+          "bbox": [
+            48.329,
+            139.097,
+            146.84,
+            369.853
+          ],
+          "confidence": 0.7154,
+          "image_ground_point": [
+            98.0,
+            359.0
+          ],
+          "bev_position": [
+            73.122,
+            807.567
+          ],
+          "velocity": [
+            -13.598,
+            1.656
+          ],
+          "age": 8,
+          "missed_frames": 3,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              154.064,
+              769.213
+            ],
+            [
+              139.47,
+              796.449
+            ],
+            [
+              112.74,
+              804.84
+            ],
+            [
+              100.655,
+              807.567
+            ],
+            [
+              86.378,
+              807.567
+            ],
+            [
+              73.122,
+              807.567
+            ]
+          ]
+        },
+        {
+          "track_id": 5,
+          "bbox": [
+            420.558,
+            171.293,
+            485.054,
+            304.375
+          ],
+          "confidence": 0.8171,
+          "image_ground_point": [
+            453.0,
+            304.0
+          ],
+          "bev_position": [
+            463.375,
+            717.522
+          ],
+          "velocity": [
+            7.461,
+            1.501
+          ],
+          "age": 8,
+          "missed_frames": 1,
+          "position_confidence": 1.0,
+          "trajectory": [
+            [
+              452.24,
+              640.321
+            ],
+            [
+              454.968,
+              732.883
+            ],
+            [
+              463.375,
+              717.522
+            ]
+          ]
+        },
+        {
+          "track_id": 6,
+          "bbox": [
+            161.568,
+            157.185,
+            237.339,
+            360.238
+          ],
+          "confidence": 0.7787,
+          "image_ground_point": [
+            199.0,
+            359.0
+          ],
+          "bev_position": [
+            176.114,
+            807.567
+          ],
+          "velocity": [
+            -20.454,
+            5.852
+          ],
+          "age": 8,
+          "missed_frames": 1,
+          "position_confidence": 0.35,
+          "trajectory": [
+            [
+              297.007,
+              711.519
+            ],
+            [
+              248.514,
+              807.567
+            ],
+            [
+              243.415,
+              807.567
+            ],
+            [
+              238.317,
+              807.567
+            ],
+            [
+              197.528,
+              807.567
+            ],
+            [
+              176.114,
+              807.567
+            ]
+          ]
+        }
+      ],
+      "known_obstacles": [
+        {
+          "bbox": [
+            107.76,
+            275.852,
+            141.167,
+            359.185
+          ],
+          "confidence": 0.4509,
+          "class_id": 26,
+          "class_name": "handbag",
+          "category": "known_obstacle",
+          "ground_point": [
+            124.463,
+            359.185
+          ]
+        }
+      ],
+      "unknown_obstacles": [
+        {
+          "bbox": [
+            364.0,
+            136.0,
+            454.0,
+            162.0
+          ],
+          "confidence": 0.35,
+          "label": "unknown_obstacle",
+          "category": "unknown_obstacle",
+          "ground_points": [
+            [
+              364.0,
+              159.0
+            ],
+            [
+              367.0,
+              161.0
+            ],
+            [
+              410.0,
+              159.0
+            ]
+          ],
+          "bev_points": [
+            [
+              419.758,
+              81.247
+            ],
+            [
+              425.835,
+              100.393
+            ],
+            [
+              545.483,
+              81.247
+            ]
+          ],
+          "note": "RGB estimate"
+        }
+      ],
+      "processing_ms": {
+        "segmentation": 0.0,
+        "detection": 0.0,
+        "tracking": 1.004,
+        "unknown_obstacles": 1.084,
+        "bev": 15.518,
+        "total": 36.508
+      },
+      "fps": 27.391,
+      "average_fps": 16.445,
+      "source_frame_index": 7,
+      "source_timestamp": 7.007000000000001,
+      "detections_total": 8,
+      "tracks_total": 6,
+      "unknown_total": 1,
+      "walkable_ratio": 0.12090712040662766
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+runtime:
+  device: cpu
+  input_width: 640
+  input_height: 360
+  segmentation_interval: 2
+  detection_interval: 2
+  reuse_previous_results: true
+  display: true
+  cpu_threads: 0
+  output_jsonl: outputs/results.jsonl
+  occupancy_dir: outputs/occupancy
+
+segmentation:
+  backend: torch
+  model: nvidia/segformer-b0-finetuned-ade-512-512
+  openvino_model: models/segformer_b0_ade_openvino
+  input_size: 384
+  temporal_smoothing: 0.65
+  minimum_component_area: 500
+  morphology_kernel: 5
+  allow_classical_fallback: true
+
+detection:
+  backend: openvino
+  model: models/yolo11n_openvino_model
+  fallback_model: yolo11n.pt
+  input_size: 416
+  confidence: 0.35
+  iou_threshold: 0.45
+  minimum_box_area: 120
+  allow_empty_on_error: true
+  allow_hog_fallback: true
+
+tracking:
+  maximum_missed_frames: 15
+  minimum_hits: 3
+  history_length: 30
+  iou_weight: 0.6
+  distance_weight: 0.4
+  max_center_distance_px: 120
+
+bev:
+  width_px: 600
+  height_px: 800
+  x_min_m: -3.0
+  x_max_m: 3.0
+  y_min_m: 0.0
+  y_max_m: 8.0
+  resolution_m_per_pixel: 0.01
+  nonmetric_x_min: -1.0
+  nonmetric_x_max: 1.0
+  nonmetric_y_min: 0.0
+  nonmetric_y_max: 1.0
+
+unknown_obstacles:
+  enabled: true
+  ground_roi_start_ratio: 0.38
+  corridor_width_ratio: 0.42
+  minimum_area: 300
+  maximum_area_ratio: 0.30
+  morphology_kernel: 7
+  confidence: 0.35
+
+social_zone:
+  static_radius_m: 0.8
+  front_radius_m: 1.2
+  rear_radius_m: 0.6
+  speed_gain: 0.5
+  normalized_static_radius_px: 45
+  normalized_front_radius_px: 70
+  normalized_rear_radius_px: 35
+
+visualization:
+  output_width: 1280
+  panel_gap: 8
+  font_scale: 0.55

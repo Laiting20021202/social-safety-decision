@@ -1,0 +1,30 @@
+walkable_classes:
+  - floor
+  - road
+  - sidewalk
+  - path
+  - dirt track
+  - runway
+  - land
+  - earth
+  - field
+  - rug
+
+optional_walkable_classes:
+  - grass
+  - earth
+  - field
+  - rug
+
+blocked_classes:
+  - stairs
+  - stairway
+  - escalator
+  - wall
+  - railing
+  - fence
+  - chair
+  - table
+  - person
+  - vehicle
+

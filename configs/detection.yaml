@@ -1,0 +1,25 @@
+confidence: 0.35
+iou_threshold: 0.45
+input_size: 416
+minimum_box_area: 120
+allow_hog_fallback: true
+
+person_classes:
+  - person
+
+obstacle_classes:
+  - bicycle
+  - car
+  - motorcycle
+  - bus
+  - truck
+  - bench
+  - chair
+  - couch
+  - backpack
+  - handbag
+  - suitcase
+  - dog
+  - cat
+  - potted plant
+  - dining table

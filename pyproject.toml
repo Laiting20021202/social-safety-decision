@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rgb-social-navigation-bev"
+version = "0.1.0"
+description = "CPU-only monocular RGB social navigation perception and BEV visualization."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "NTHU HRC Lab"}]
+dependencies = [
+  "numpy>=1.24,<3",
+  "opencv-python-headless>=4.8,<5",
+  "PyYAML>=6.0,<7",
+  "scipy>=1.10,<2",
+  "Pillow>=10,<12",
+  "tqdm>=4.66,<5",
+  "datasets>=2.18,<4",
+  "torch>=2.6,<3",
+  "transformers>=4.39,<5",
+  "ultralytics>=8.3,<9",
+  "openvino>=2024.0,<2027",
+  "streamlit>=1.32,<2",
+]
+
+[project.scripts]
+social-bev = "social_bev.run:main"
+
+[tool.setuptools.packages.find]
+include = ["social_bev*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -p no:launch_testing -p no:launch_ros"
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
