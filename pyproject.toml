@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "realtime-3d-safety-decision"
+version = "0.1.0"
+description = "Real-time 3D obstacle segmentation, tracking, and safety decisions"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = [
+  "numpy>=1.23,<2",
+  "opencv-python>=4.8,<4.12",
+  "PyYAML>=6.0",
+  "scipy>=1.10",
+  "psutil>=5.9",
+  "torch>=2.1",
+  "torchvision>=0.16",
+  "ultralytics>=8.3",
+  "transformers>=4.43",
+  "viser>=1.0.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.4,<9", "pytest-timeout>=2.2"]
+export = ["plyfile>=1.0,<1.1.3"]
+
+[tool.setuptools.packages.find]
+include = ["realtime_safety*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["model: downloads/loads a neural model", "gui: starts a GUI server"]

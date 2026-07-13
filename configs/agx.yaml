@@ -1,0 +1,9 @@
+name: agx
+device: cuda
+scale_mode: relative
+video: {queue_size: 2, loop: false, playback_speed: 1.0}
+segmentation: {model: yolo11n-seg.engine, input_size: 320, confidence: 0.3, iou: 0.5, frequency_hz: 10.0, fp16: true}
+reconstruction: {depth_mode: hybrid, model: depth-anything/Depth-Anything-V2-Small-hf, input_size: 224, frequency_hz: 1.5, fast_depth_frequency_hz: 5.0, max_points: 20000, voxel_size: 0.1, confidence_threshold: 0.3, max_relative_depth: 15.0, fp16: true}
+tracking: {max_missing: 12, iou_threshold: 0.2, association_distance: 1.5, dynamic_enter_speed: 0.15, dynamic_exit_speed: 0.08, minimum_dynamic_hits: 3}
+safety: {target_hz: 10.0, prediction_horizon: 3.0, prediction_timestep: 0.2, robot_radius: 0.35, safety_margin: 0.2, uncertainty_gain: 0.25, stop_ttc: 1.0, warning_ttc: 2.5, stop_clearance: 0.4, warning_clearance: 0.8, release_safe_updates: 5}
+gui: {host: 0.0.0.0, port: 8080, max_video_width: 800, point_size: 0.015}

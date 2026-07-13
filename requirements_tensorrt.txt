@@ -1,0 +1,4 @@
+# Install a TensorRT build matching the host CUDA version first.
+onnx>=1.16
+onnxruntime-gpu>=1.18
+torch-tensorrt>=2.4; platform_machine == "x86_64"

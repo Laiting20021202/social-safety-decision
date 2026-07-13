@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.venv/
+dist/
+build/
+*.egg-info/
+models/
+outputs/
+sessions/
+third_party/St4RTrack/
+*.pt
+*.pth
+*.engine
+*.onnx

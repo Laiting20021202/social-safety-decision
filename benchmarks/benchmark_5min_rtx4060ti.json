@@ -1,0 +1,40 @@
+{
+  "source": "/tmp/st4rtrack_reference/assets/feng.mp4",
+  "profile_requested": "realtime_fast",
+  "profile_final": "FAST",
+  "depth_mode_requested": "fast_depth",
+  "depth_source_final": "depth_anything_v2_relative",
+  "duration_seconds": 300.0414763118606,
+  "hardware": {
+    "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
+    "python": "3.10.12",
+    "gpu": "NVIDIA GeForce RTX 4060 Ti",
+    "gpu_total_mb": 16067.9375
+  },
+  "performance": {
+    "input_fps": 30.002663000538217,
+    "display_fps": 29.27902779922064,
+    "segmentation_fps": 8.265306057606274,
+    "reconstruction_fps": 7.1383290124519085,
+    "safety_fps": 9.996072347584159,
+    "average_latency_ms": 45.38156497796687,
+    "p95_latency_ms": 98.07494566775857,
+    "dropped_frames": 467,
+    "queue_size": 0,
+    "queue_capacity": 2
+  },
+  "memory": {
+    "ram_start_mb": 691.11328125,
+    "ram_end_mb": 1972.9453125,
+    "ram_peak_mb": 2015.5546875,
+    "vram_start_mb": 0.0,
+    "vram_end_mb": 119.06396484375,
+    "vram_peak_mb": 157.2392578125,
+    "steady_ram_growth_mb": -0.29296875,
+    "steady_vram_growth_mb": -0.17626953125,
+    "ram_slope_mb_per_minute": 0.4106290666720538,
+    "vram_slope_mb_per_minute": 0.2576425859113261
+  },
+  "runtime_fallbacks_or_errors": {},
+  "samples": 599
+}
