@@ -36,13 +36,17 @@ class ReconstructionConfig:
     max_points: int = 30_000
     voxel_size: float = 0.08
     confidence_threshold: float = 0.25
+    display_confidence_threshold: float = 0.0
+    filter_sky: bool = False
     max_relative_depth: float = 20.0
+    anchor_interval: int = 30
     fp16: bool = True
 
 
 @dataclass(slots=True)
 class TrackingConfig:
     max_missing: int = 12
+    visual_hold_updates: int = 2
     iou_threshold: float = 0.2
     association_distance: float = 1.5
     dynamic_enter_speed: float = 0.15
@@ -71,11 +75,15 @@ class GuiConfig:
     port: int = 8080
     max_video_width: int = 960
     point_size: float = 0.012
+    history_frames: int = 64
+    history_stride: int = 4
 
 
 @dataclass(slots=True)
 class AppConfig:
     name: str = "realtime_fast"
+    mode: str = "safety"
+    people_overlay: bool = False
     device: str = "cuda"
     scale_mode: str = "relative"
     camera_height: float | None = None

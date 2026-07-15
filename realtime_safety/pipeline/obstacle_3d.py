@@ -37,18 +37,32 @@ class ObstacleExtractor3D:
             if detection.track_id is None:
                 continue
             mask = self._mask_for_detection(detection, width, height)
-            valid = (
-                mask
-                & np.isfinite(cloud.pointmap).all(axis=-1)
+            assignment_mask = mask
+            if detection.class_name == "person" and int(mask.sum()) >= 80:
+                # Trim mixed foreground/background boundary pixels before
+                # reading the St4RTrack pointmap.
+                mask = cv2.erode(mask.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1).astype(bool)
+            valid_geometry = (
+                np.isfinite(cloud.pointmap).all(axis=-1)
                 & (dense_confidence >= self.confidence_threshold)
                 & (cloud.pointmap[..., 1] > 0.05)
                 & (cloud.pointmap[..., 1] < self.max_depth)
             )
+            valid = (
+                mask
+                & valid_geometry
+            )
             points = cloud.pointmap[valid]
-            points = self._robust_filter(points)
+            points = (
+                self._robust_filter_person(points)
+                if detection.class_name == "person"
+                else self._robust_filter(points)
+            )
             if len(points) < self.minimum_points:
                 continue
-            assigned |= valid
+            # Keep the full segmentation footprint reserved even though person
+            # geometry is estimated from a boundary-trimmed mask.
+            assigned |= assignment_mask & valid_geometry
             confidence = np.full(len(points), detection.confidence, dtype=np.float32)
             points, _, _ = voxel_downsample(
                 points,
@@ -117,9 +131,28 @@ class ObstacleExtractor3D:
         threshold = np.median(distance) + max(3.5 * mad, 0.1)
         return points[distance <= threshold]
 
+    @classmethod
+    def _robust_filter_person(cls, points: np.ndarray) -> np.ndarray:
+        """Keep the compact foreground depth layer inside a person mask."""
+        points = cls._robust_filter(points)
+        if len(points) < 12:
+            return points
+        forward = points[:, 1]
+        median = float(np.median(forward))
+        mad = float(np.median(np.abs(forward - median)))
+        depth_gate = max(3.0 * 1.4826 * mad, 0.035 * max(abs(median), 1.0), 0.025)
+        points = points[np.abs(forward - median) <= depth_gate]
+        if len(points) < 12:
+            return points
+        lower, upper = np.percentile(points, (5.0, 95.0), axis=0)
+        span = np.maximum(upper - lower, 0.02)
+        inside = np.all((points >= lower - 0.25 * span) & (points <= upper + 0.25 * span), axis=1)
+        return points[inside]
+
     @staticmethod
     def _observation(track_id: int, class_name: str, confidence: float, points: np.ndarray, timestamp: float) -> ObstacleObservation3D:
-        minimum, maximum = np.percentile(points, [2.0, 98.0], axis=0).astype(np.float32)
+        percentiles = [5.0, 95.0] if class_name == "person" else [2.0, 98.0]
+        minimum, maximum = np.percentile(points, percentiles, axis=0).astype(np.float32)
         bbox = BBox3D(minimum=minimum, maximum=maximum)
         center = np.median(points, axis=0).astype(np.float32)
         radius = max(float(np.linalg.norm((maximum[:2] - minimum[:2]) * 0.5)), 0.05)

@@ -24,6 +24,9 @@ class SegmentationBackend(ABC):
     @abstractmethod
     def infer(self, frame: FramePacket) -> list[Detection2D]: ...
 
+    def infer_people(self, frame: FramePacket) -> list[Detection2D]:
+        return [detection for detection in self.infer(frame) if detection.class_name == "person"]
+
     def close(self) -> None:
         return None
 
@@ -87,7 +90,7 @@ class UltralyticsSegmentationBackend(SegmentationBackend):
         dummy = np.zeros((self.config.input_size, self.config.input_size, 3), dtype=np.uint8)
         self._predict(dummy, verbose=False)
 
-    def _predict(self, bgr: np.ndarray, verbose: bool = False):
+    def _predict(self, bgr: np.ndarray, verbose: bool = False, classes: list[int] | None = None):
         if self.model is None:
             raise RuntimeError("Segmentation model has not been loaded")
         import torch
@@ -109,12 +112,19 @@ class UltralyticsSegmentationBackend(SegmentationBackend):
                 retina_masks=False,
                 verbose=verbose,
                 max_det=100,
+                classes=classes,
             )
         self.last_gpu_ms = timer.elapsed_ms
         return results
 
     def infer(self, frame: FramePacket) -> list[Detection2D]:
-        results = self._predict(frame.bgr)
+        return self._results_to_detections(self._predict(frame.bgr), frame)
+
+    def infer_people(self, frame: FramePacket) -> list[Detection2D]:
+        person_ids = [class_id for class_id, name in self.names.items() if name == "person"]
+        return self._results_to_detections(self._predict(frame.bgr, classes=person_ids or None), frame)
+
+    def _results_to_detections(self, results, frame: FramePacket) -> list[Detection2D]:
         if not results:
             return []
         result = results[0]

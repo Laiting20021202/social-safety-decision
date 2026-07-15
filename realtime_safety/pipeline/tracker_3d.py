@@ -50,6 +50,20 @@ class Tracker3D:
                 continue
             track = self._filters[track_id]
             dt = max(float(observation.timestamp - track.observation.timestamp), 1e-3)
+            if observation.class_name == "person" and track.hits >= 2:
+                jump = float(np.linalg.norm(observation.position_xyz - track.observation.position_xyz))
+                jump_gate = max(0.12, 1.25 * max(observation.radius, track.observation.radius))
+                if jump > jump_gate:
+                    # A sparse-frame 2D ID switch must not become a giant 3D
+                    # velocity vector. Re-anchor at zero velocity instead.
+                    self._filters[track_id] = _Filter(
+                        observation=observation,
+                        x=np.r_[observation.position_xyz, np.zeros(3)].astype(np.float64),
+                        covariance=np.eye(6, dtype=np.float64) * 0.5,
+                        history=[observation.position_xyz.copy()],
+                        filter_timestamp=observation.timestamp,
+                    )
+                    continue
             previous_velocity = track.x[3:].copy()
             measured_velocity = (observation.position_xyz - track.observation.position_xyz) / dt
             prediction_dt = max(observation.timestamp - track.filter_timestamp, 0.0)

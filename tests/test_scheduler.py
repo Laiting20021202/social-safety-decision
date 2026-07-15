@@ -40,6 +40,11 @@ class SlowLoadingSegmentation(FastSegmentation):
         __import__("threading").Event().wait(0.4)
 
 
+class ForbiddenSegmentation(FastSegmentation):
+    def load(self) -> None:
+        raise AssertionError("YOLO must not load in reconstruction-only mode")
+
+
 class SlowDepth:
     def __init__(self, delay: float = 0.08) -> None:
         self.delay = delay
@@ -116,3 +121,55 @@ def test_raw_video_is_rendered_while_segmentation_is_loading(tmp_path: Path) -> 
     assert snapshot.frame is not None
     assert snapshot.annotated_bgr is not None
     assert not snapshot.status["models"]["segmentation"]
+
+
+def test_reconstruction_mode_skips_yolo_and_safety(tmp_path: Path) -> None:
+    video = tmp_path / "viewer.mp4"
+    make_video(video, frames=16)
+    config = load_config("st4rtrack_viewer")
+    config.mode = "reconstruction"
+    config.people_overlay = False
+    config.device = "cpu"
+    config.reconstruction.depth_mode = "fast_depth"
+    config.reconstruction.fast_depth_frequency_hz = 30.0
+    pipeline = RealtimePipeline(
+        config,
+        segmentation_backend=ForbiddenSegmentation(),
+        depth_backend=SlowDepth(0.01),
+    )
+    pipeline.start_workers()
+    pipeline.start_source(str(video), max_frames=12)
+    assert pipeline.wait_until_source_done(timeout=5.0)
+    snapshot = pipeline.gui_state.read()
+    pipeline.close()
+    assert snapshot.frame is not None
+    assert snapshot.pointcloud is not None
+    assert snapshot.safety is None
+    assert snapshot.detections == []
+    assert np.array_equal(snapshot.annotated_bgr, snapshot.frame.bgr)
+    assert not snapshot.status["models"]["segmentation"]
+
+
+def test_people_overlay_runs_yolo_and_3d_tracking_without_safety(tmp_path: Path) -> None:
+    video = tmp_path / "people-viewer.mp4"
+    make_video(video, frames=24)
+    config = load_config("st4rtrack_viewer")
+    config.mode = "reconstruction"
+    config.people_overlay = True
+    config.device = "cpu"
+    config.reconstruction.depth_mode = "fast_depth"
+    config.reconstruction.fast_depth_frequency_hz = 30.0
+    pipeline = RealtimePipeline(
+        config,
+        segmentation_backend=FastSegmentation(),
+        depth_backend=SlowDepth(0.01),
+    )
+    pipeline.start_workers()
+    pipeline.start_source(str(video), max_frames=20)
+    assert pipeline.wait_until_source_done(timeout=5.0)
+    snapshot = pipeline.gui_state.read()
+    pipeline.close()
+    assert snapshot.safety is None
+    assert snapshot.people
+    assert all(track.class_name == "person" for track in snapshot.people)
+    assert snapshot.status["models"]["segmentation"]

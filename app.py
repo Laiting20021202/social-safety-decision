@@ -13,15 +13,23 @@ from realtime_safety.export.pointcloud_export import export_ply
 from realtime_safety.export.session_logger import SessionLogger
 from realtime_safety.export.video_recorder import VideoRecorder
 from realtime_safety.gui.dashboard import Dashboard
+from realtime_safety.gui.reconstruction_scene import ReconstructionScene3D
 from realtime_safety.gui.scene_3d import Scene3D
 from realtime_safety.scheduler import RealtimePipeline
 from realtime_safety.utils.validation import validate_config
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Real-time 3D obstacle safety dashboard")
+    parser = argparse.ArgumentParser(description="Interactive St4RTrack 4D reconstruction viewer and safety dashboard")
     parser.add_argument("--source", help="Video path, webcam index, or RTSP URL")
-    parser.add_argument("--profile", default="realtime_fast", help="Profile name or YAML path")
+    parser.add_argument("--profile", default="st4rtrack_viewer", help="Profile name or YAML path")
+    parser.add_argument("--mode", choices=("reconstruction", "safety"), help="Override the profile application mode")
+    parser.add_argument(
+        "--people",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable YOLO person masks, 3D person boxes, centers, and direction arrows",
+    )
     parser.add_argument("--device", default=None, help="cuda, cuda:0, or cpu")
     parser.add_argument("--depth-mode", choices=("st4rtrack", "hybrid", "fast_depth", "rgbd"))
     parser.add_argument("--scale-mode", choices=("relative", "calibrated", "rgbd"))
@@ -48,6 +56,10 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(threadName)s %(name)s: %(message)s",
     )
     config = load_config(args.profile)
+    if args.mode:
+        config.mode = args.mode
+    if args.people is not None:
+        config.people_overlay = args.people
     if args.device:
         config.device = args.device
     if args.depth_mode:
@@ -74,8 +86,14 @@ def main() -> int:
         dashboard = Dashboard(
             config.gui,
             lambda command, value: pipeline_holder["pipeline"].handle_command(command, value),
+            reconstruction_only=config.mode == "reconstruction",
+            people_overlay=config.people_overlay,
         )
-        scene = Scene3D(dashboard.server, config.gui)
+        scene = (
+            ReconstructionScene3D(dashboard.server, config.gui)
+            if config.mode == "reconstruction"
+            else Scene3D(dashboard.server, config.gui)
+        )
     output_dir = Path(args.output_dir or f"sessions/{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     session_logger = None if args.no_log else SessionLogger(output_dir)
     recorder = VideoRecorder(output_dir / "annotated.mp4") if args.record else None

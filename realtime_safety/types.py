@@ -46,6 +46,7 @@ class Detection2D:
     timestamp: float
     mask: np.ndarray | None = None
     track_id: int | None = None
+    track_hits: int = 1
     velocity_xy: np.ndarray = field(default_factory=lambda: np.zeros(2, dtype=np.float32))
     image_size: tuple[int, int] | None = None
 
@@ -171,6 +172,7 @@ class PipelineSnapshot:
     annotated_bgr: np.ndarray | None = None
     detections: list[Detection2D] = field(default_factory=list)
     pointcloud: PointCloudFrame | None = None
+    people: list[Track3DState] = field(default_factory=list)
     safety: SafetySnapshot | None = None
     performance: PerformanceSnapshot = field(default_factory=PerformanceSnapshot)
     profile: str = "AUTO"

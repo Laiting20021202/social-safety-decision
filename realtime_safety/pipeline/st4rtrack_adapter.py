@@ -4,6 +4,7 @@ import contextlib
 import logging
 import sys
 import time
+import types
 from pathlib import Path
 
 import cv2
@@ -46,6 +47,19 @@ class St4RTrackAdapter:
                 f"St4RTrack not found at {root}. Run scripts/download_models.sh --st4rtrack or use hybrid/fast_depth."
             )
         sys.path.insert(0, str(root)) if str(root) not in sys.path else None
+        # Upstream imports its evaluation-only ``evo`` helper at model import
+        # time. The live adapter never evaluates camera trajectories, so avoid
+        # requiring that unrelated package in the lightweight viewer runtime.
+        try:
+            import evo  # noqa: F401
+        except ImportError:
+            vo_eval = types.ModuleType("dust3r.utils.vo_eval")
+
+            def _evaluation_only(*_args, **_kwargs):
+                raise RuntimeError("Trajectory export requires the optional St4RTrack evaluation dependencies")
+
+            vo_eval.save_trajectory_tum_format = _evaluation_only
+            sys.modules.setdefault("dust3r.utils.vo_eval", vo_eval)
         from dust3r.model import AsymmetricCroCo3DStereo
 
         self.device = self.requested_device if self.requested_device.startswith("cuda") and torch.cuda.is_available() else "cpu"
@@ -98,7 +112,26 @@ class St4RTrackAdapter:
         camera_tracking = pred_tracking["pts3d"][0].float().cpu().numpy()
         tracking_pointmap = np.stack((camera_tracking[..., 0], camera_tracking[..., 2], -camera_tracking[..., 1]), axis=-1)
         tracking_conf = pred_tracking["conf"][0].float().cpu().numpy()
-        valid = np.isfinite(pointmap).all(axis=-1) & (reconstruction_conf >= self.config.confidence_threshold)
+        finite = np.isfinite(pointmap).all(axis=-1)
+        display_confidence = max(
+            self.config.confidence_threshold,
+            self.config.display_confidence_threshold,
+        )
+        valid = finite & (reconstruction_conf >= display_confidence)
+        if self.config.filter_sky:
+            sky = _connected_sky_mask(current_rgb)
+            valid &= ~sky
+            # A color-only mask cannot catch all gray/overexposed skies. Reject
+            # upper-image points whose predicted depth is implausibly nearer
+            # than the robust lower-image scene scale.
+            height = pointmap.shape[0]
+            lower = finite[int(height * 0.62) :] & (pointmap[int(height * 0.62) :, :, 1] > 0.05)
+            lower_depth = pointmap[int(height * 0.62) :, :, 1][lower]
+            if len(lower_depth) > 32:
+                near_cutoff = 0.35 * float(np.median(lower_depth))
+                rows = np.arange(height)[:, None]
+                invalid_near_upper = (rows < height * 0.58) & (pointmap[..., 1] < near_cutoff)
+                valid &= ~invalid_near_upper
         points, colors, confidence = voxel_downsample(
             pointmap[valid], current_rgb[valid], reconstruction_conf[valid], self.config.voxel_size, self.config.max_points
         )
@@ -163,3 +196,35 @@ class St4RTrackAdapter:
             "idx": frame_index,
             "instance": f"memory_frame_{frame_index}",
         }, resized
+
+
+def _connected_sky_mask(rgb: np.ndarray) -> np.ndarray:
+    """Find blue or bright low-texture regions connected to the image top."""
+    rgb = np.asarray(rgb, dtype=np.uint8)
+    height, width = rgb.shape[:2]
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    gradient_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gradient_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    gradient = cv2.magnitude(gradient_x, gradient_y)
+    rows = np.arange(height)[:, None]
+    upper = rows < height * 0.62
+    blue = (
+        upper
+        & (hsv[..., 0] >= 85)
+        & (hsv[..., 0] <= 132)
+        & (hsv[..., 1] >= 38)
+        & (hsv[..., 2] >= 65)
+    )
+    bright_smooth = upper & (hsv[..., 1] < 45) & (hsv[..., 2] > 165) & (gradient < 18.0)
+    candidates = (blue | bright_smooth).astype(np.uint8)
+    kernel = np.ones((5, 5), dtype=np.uint8)
+    candidates = cv2.morphologyEx(candidates, cv2.MORPH_CLOSE, kernel)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(candidates, connectivity=8)
+    result = np.zeros((height, width), dtype=bool)
+    top_labels = set(np.unique(labels[: max(2, height // 40)]).tolist())
+    minimum_area = max(32, int(height * width * 0.002))
+    for label in range(1, count):
+        if label in top_labels and int(stats[label, cv2.CC_STAT_AREA]) >= minimum_area:
+            result |= labels == label
+    return cv2.dilate(result.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1).astype(bool)

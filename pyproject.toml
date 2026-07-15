@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=68,<80", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -15,11 +15,11 @@ dependencies = [
   "PyYAML>=6.0",
   "scipy>=1.10",
   "psutil>=5.9",
-  "torch>=2.1",
-  "torchvision>=0.16",
-  "ultralytics>=8.3",
-  "transformers>=4.43",
-  "viser>=1.0.0",
+  "torch>=2.1,<2.10",
+  "torchvision>=0.16,<0.25",
+  "ultralytics>=8.3,<9",
+  "transformers>=4.43,<5",
+  "viser>=1.0.0,<2",
 ]
 
 [project.optional-dependencies]

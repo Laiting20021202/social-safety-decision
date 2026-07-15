@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from realtime_safety.config import ReconstructionConfig
-from realtime_safety.pipeline.st4rtrack_adapter import St4RTrackAdapter
+from realtime_safety.pipeline.st4rtrack_adapter import St4RTrackAdapter, _connected_sky_mask
 from realtime_safety.types import FramePacket
 
 
@@ -35,3 +35,13 @@ def test_adapter_accepts_memory_frames_and_returns_pointmaps() -> None:
     assert output.pointmap.shape == (224, 224, 3)
     assert 0 < len(output.points) <= config.max_points
     assert output.tracking_points is not None
+
+
+def test_connected_sky_mask_removes_top_sky_but_keeps_ground() -> None:
+    rgb = np.zeros((100, 160, 3), dtype=np.uint8)
+    rgb[:55] = (65, 145, 230)
+    rng = np.random.default_rng(3)
+    rgb[55:] = rng.integers((30, 60, 20), (110, 155, 90), size=(45, 160, 3), dtype=np.uint8)
+    mask = _connected_sky_mask(rgb)
+    assert mask[:50].mean() > 0.95
+    assert mask[65:].mean() < 0.01

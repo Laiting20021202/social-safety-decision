@@ -82,6 +82,7 @@ class StableTracker2D:
                 track.missing = 0
                 track.hits += 1
                 detection.track_id = track_id
+                detection.track_hits = track.hits
                 detection.velocity_xy = track.velocity.astype(np.float32)
                 matched_tracks.add(track_id)
                 matched_detections.add(int(column))
@@ -124,6 +125,7 @@ class StableTracker2D:
                     centroid_xy=centroid,
                     timestamp=timestamp,
                     track_id=track.track_id,
+                    track_hits=track.hits,
                     velocity_xy=track.velocity.copy(),
                     image_size=track.image_size,
                 )

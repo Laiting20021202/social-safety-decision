@@ -1,6 +1,19 @@
-# Real-Time 3D Obstacle Segmentation and Safety Decision System
+# Interactive St4RTrack 4D Viewer and Safety System
 
-Live RGB-video instance segmentation, stable 2D/3D tracking, monocular or St4RTrack reconstruction, directional swept danger volumes, local forward-corridor planning, and a mouse-interactive Viser dashboard.
+The default application is a clean St4RTrack-style 4D reconstruction viewer with a focused person layer: RGB video in, centered color point clouds in a shared anchor coordinate system out, plus YOLO person masks mapped into robust 3D person centers, wireframe 3D boxes, and short direction arrows. It does **not** render danger volumes, ground/path planning, other object classes, or run the safety worker. The original safety pipeline remains available through the `realtime_fast`, `realtime_balanced`, `realtime_quality`, and `agx` profiles.
+
+## One-command viewer
+
+```bash
+cd /path/to/realtime_3d_safety_decision
+bash scripts/run_viewer.sh
+```
+
+Open <http://127.0.0.1:8080>, upload a video, and the viewer will populate `/frames/t...` with bounded 4D reconstruction history. Left drag rotates, the wheel zooms, and right drag pans. To open a video directly:
+
+```bash
+bash scripts/run_viewer.sh /path/to/video.mp4
+```
 
 The pipeline is designed around one safety rule: stale frames are less useful than current frames. Every inter-worker queue is bounded (default size 2), drops its oldest item under pressure, and records the drop. Models run outside the GUI renderer, safety prediction continues at its own target rate, and no complete-video preprocessing or per-frame disk round-trip is used.
 
@@ -8,10 +21,18 @@ The pipeline is designed around one safety rule: stale frames are less useful th
 
 - MP4, AVI, MOV, MKV, WEBM, webcam, and RTSP sources, including pause, resume, restart, loop, seek, and playback speed.
 - GUI upload and command-line source selection.
-- Persistent YOLO11n-seg CUDA backend with mixed precision; COCO obstacle classes are normalized to person, bicycle, chair, bag, suitcase, vehicle, and related obstacle types.
+- Reconstruction viewer with YOLO11s-seg restricted to people; detections are shown in an aligned right-panel preview, and only detections confirmed on consecutive reconstruction frames become 3D boxes.
+- Person-mask boundaries and background depth layers are rejected before estimating the robust 3D center and tight percentile box. Only boxes observed in the current YOLO frame are rendered.
+- Confirmed boxes survive up to two missed updates using timestamp-aware 3D prediction, preventing single-frame YOLO misses from flashing the box off and on. The sidebar reports how many boxes are in this short hold state.
+- Walking direction uses recent 3D-center displacement with smoothed Kalman velocity as a sparse-update fallback. ID jumps are re-anchored before they can create a large false arrow.
+- The RTX 4060 Ti viewer profile uses measured 320px St4RTrack input, independent CUDA streams, 24 FPS 640px sidebar video delivery, and sends each 3D frame only once instead of retransmitting it on every video frame.
+- Live playback uses one persistent WebGL point-cloud/people node set and applies aligned updates atomically. The 64-frame scene history is disabled in this profile because allocating and toggling frame nodes caused visible white flashes in browsers.
+- Outdoor display filtering removes top-connected blue/bright low-texture sky and implausibly near upper-image geometry. Its confidence threshold and 24k hard point budget affect only WebGL output; aligned dense St4RTrack pointmaps remain available for person-center and 3D-box extraction.
+- Persistent YOLO11n-seg CUDA backend in the optional safety profiles; COCO obstacle classes are normalized to person, bicycle, chair, bag, suitcase, vehicle, and related obstacle types.
 - Timestamp-aware stable 2D IDs, short-occlusion association, and between-segmentation prediction.
 - Real Depth Anything V2 Small relative monocular depth point maps; no synthetic point cloud fallback.
-- Optional in-memory St4RTrack frame-pair adapter. It directly returns the tracking/reconstruction point maps and never writes NPY files.
+- In-memory St4RTrack frame-pair adapter. It directly returns tracking/reconstruction point maps and never writes NPY files.
+- Light-theme 4D viewer with centered color point clouds, automatic initial framing, current-frame playback, optional history display, and a bounded `/frames` scene tree.
 - Mask-to-pointmap 3D clusters plus radius-connected `unknown_obstacle` clustering.
 - Constant-velocity 3D Kalman filters with timestamp-derived velocity and static/dynamic hysteresis.
 - Three-second trajectory prediction and an uncertainty-inflated series-of-ellipsoids swept volume.
@@ -55,18 +76,18 @@ Full 3D reconstruction is allowed to run below 10 Hz. Every safety tick predicts
 Python 3.10–3.12 and an NVIDIA CUDA setup supported by PyTorch are recommended.
 
 ```bash
-git clone <this-repository>
+git clone --branch 3d_version https://github.com/Laiting20021202/social-safety-decision.git realtime_3d_safety_decision
 cd realtime_3d_safety_decision
 bash scripts/setup.sh
 source .venv/bin/activate
-bash scripts/download_models.sh
+bash scripts/download_models.sh --viewer
 ```
 
 Or install into an existing environment:
 
 ```bash
 python3 -m pip install -r requirements.txt
-bash scripts/download_models.sh
+bash scripts/download_models.sh --viewer
 ```
 
 TensorRT is optional and never required to start:
@@ -77,13 +98,13 @@ python3 -m pip install -r requirements_tensorrt.txt
 
 The AGX profile expects an exported `yolo11n-seg.engine`. Export it on the target architecture with Ultralytics before selecting that profile.
 
-## Optional St4RTrack
+## St4RTrack viewer model
 
 ```bash
-bash scripts/download_models.sh --st4rtrack
+bash scripts/download_models.sh --viewer
 ```
 
-This shallow-clones the official repository into ignored `third_party/St4RTrack`. On first use, the adapter loads `yupengchengg147/St4RTrack` from Hugging Face unless `st4rtrack_checkpoint` points to a local file. The external code/model has a non-commercial scientific research license; review it before use.
+This shallow-clones the official repository into ignored `third_party/St4RTrack` and caches the `yupengchengg147/St4RTrack` sequence checkpoint from Hugging Face. The external code/model has a non-commercial scientific research license; review it before use.
 
 The adapter contract is:
 
@@ -100,7 +121,23 @@ Both inputs are memory-resident arrays/tensors. `pred2["pts3d_in_other_view"]` s
 
 ## Run
 
-Fast profile:
+Default 4D viewer with YOLO 3D person boxes/centers/arrows, but no danger zones:
+
+```bash
+bash scripts/run_viewer.sh
+# equivalent:
+.venv/bin/python app.py --profile st4rtrack_viewer --device cuda
+```
+
+The right sidebar lists every current YOLO person with ID and confidence. `pending` means it has appeared once and is visible for inspection but is not yet allowed to create a 3D box; `confirmed` means it passed the consecutive-frame gate.
+
+Disable the person layer when an entirely bare point cloud is preferred:
+
+```bash
+bash scripts/run_viewer.sh --no-people
+```
+
+Optional safety profile:
 
 ```bash
 python app.py --source /path/to/test.webm --profile realtime_fast --device cuda
@@ -126,7 +163,7 @@ AGX:
 python app.py --source /path/to/test.mp4 --profile agx --device cuda
 ```
 
-GUI upload only:
+Safety GUI upload only:
 
 ```bash
 python app.py --profile realtime_fast --device cuda
@@ -144,12 +181,13 @@ Safety JSONL and trajectory CSV are enabled by default. Use `--no-log` to disabl
 
 ## Profiles
 
-| Profile | Segmentation | 3D input | Maximum displayed points | Intended use |
+| Profile | Mode | 3D input | Maximum displayed points | Intended use |
 |---|---:|---:|---:|---|
-| `realtime_fast` | 320 | 224 | 30,000 | Default latency-first mode |
-| `realtime_balanced` | 416 | 320 | 60,000 | More 3D detail |
-| `realtime_quality` | 640 | 512 | 100,000 | Visualization quality; may miss 10 Hz |
-| `agx` | 320 TensorRT | 224 | 20,000 | Serialized low-memory Jetson mode |
+| `st4rtrack_viewer` | Reconstruction + YOLO11s people at 640 | St4RTrack 320 | 60,000 | RTX 4060 Ti live viewer with held person boxes and walking arrows |
+| `realtime_fast` | Safety + YOLO 320 | Depth/St4 224 | 30,000 | Latency-first safety mode |
+| `realtime_balanced` | Safety + YOLO 416 | Depth/St4 320 | 60,000 | More 3D detail |
+| `realtime_quality` | Safety + YOLO 640 | St4RTrack 512 | 100,000 | Safety visualization quality |
+| `agx` | Safety + TensorRT YOLO | Depth/St4 224 | 20,000 | Serialized low-memory Jetson mode |
 
 The adaptive controller watches p95 latency, display rate, queue pressure, and VRAM. Under sustained pressure it lowers point count, reconstruction input/rate, and segmentation quality while leaving `safety.target_hz` unchanged. The GUI shows `DEGRADED`; recovery is gradual after a stable interval.
 

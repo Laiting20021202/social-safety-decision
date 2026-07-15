@@ -2,14 +2,24 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON="${PYTHON:-python3}"
+if [[ -x "${ROOT_DIR}/.venv/bin/python" ]]; then
+  DEFAULT_PYTHON="${ROOT_DIR}/.venv/bin/python"
+else
+  DEFAULT_PYTHON="python3"
+fi
+PYTHON="${PYTHON:-${DEFAULT_PYTHON}}"
 WITH_ST4RTRACK=0
+WITH_SAFETY_MODELS=1
 if [[ "${1:-}" == "--st4rtrack" ]]; then
   WITH_ST4RTRACK=1
+elif [[ "${1:-}" == "--viewer" ]]; then
+  WITH_ST4RTRACK=1
+  WITH_SAFETY_MODELS=0
 fi
 
 cd "${ROOT_DIR}"
-"${PYTHON}" - <<'PY'
+if [[ "${WITH_SAFETY_MODELS}" -eq 1 ]]; then
+  "${PYTHON}" - <<'PY'
 from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 from ultralytics import YOLO
 
@@ -19,12 +29,22 @@ AutoImageProcessor.from_pretrained(name)
 AutoModelForDepthEstimation.from_pretrained(name)
 print("YOLO11n-seg and Depth Anything V2 Small are cached.")
 PY
+fi
 
 if [[ "${WITH_ST4RTRACK}" -eq 1 ]]; then
   mkdir -p "${ROOT_DIR}/third_party"
   if [[ ! -d "${ROOT_DIR}/third_party/St4RTrack/.git" ]]; then
     git clone --depth 1 https://github.com/HavenFeng/St4RTrack.git "${ROOT_DIR}/third_party/St4RTrack"
   fi
-  echo "St4RTrack code installed. Its checkpoint downloads on first st4rtrack/hybrid load from yupengchengg147/St4RTrack."
+  HF_XET_CHUNK_CACHE_SIZE_BYTES=0 "${PYTHON}" - <<'PY'
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="yupengchengg147/St4RTrack",
+    allow_patterns=["config.json", "model.safetensors"],
+)
+print("St4RTrack sequence checkpoint is cached.")
+PY
+  echo "St4RTrack code and sequence checkpoint installed."
   echo "Upstream St4RTrack code/checkpoints are non-commercial research assets."
 fi
