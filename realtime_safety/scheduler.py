@@ -27,7 +27,8 @@ from realtime_safety.pipeline.st4rtrack_adapter import St4RTrackAdapter
 from realtime_safety.pipeline.tracker_2d import StableTracker2D
 from realtime_safety.pipeline.tracker_3d import Tracker3D
 from realtime_safety.pipeline.traversable_region import TraversableRegion, compute_traversable_region
-from realtime_safety.pipeline.video_source import PlaybackState, VideoSource
+from realtime_safety.pipeline.video_source import AUTO_CAMERA_ALIASES, CameraDetectionError, PlaybackState, VideoSource
+from realtime_safety.pipeline.video_depth import VideoDepthBackend
 from realtime_safety.types import (
     Detection2D,
     FramePacket,
@@ -133,7 +134,11 @@ class RealtimePipeline:
         self.segmentation = segmentation_backend
         if self.segmentation is None and (config.mode == "safety" or config.people_overlay):
             self.segmentation = create_segmentation_backend(config.segmentation, config.device)
-        self.depth = depth_backend or MonocularDepthBackend(config.reconstruction, config.device)
+        self.depth = depth_backend or (
+            VideoDepthBackend(config.reconstruction, config.device)
+            if config.reconstruction.depth_mode == "video_depth"
+            else MonocularDepthBackend(config.reconstruction, config.device)
+        )
         self.st4r = St4RTrackAdapter(config.reconstruction, config.device)
         self.dashboard = dashboard
         self.scene = scene
@@ -226,6 +231,18 @@ class RealtimePipeline:
             self._capture_complete.clear()
             self._final_frame_index = -1
         self._reset_runtime_state()
+        if video.camera_info is not None and self.dashboard is not None:
+            camera = video.camera_info
+            self.dashboard.update_camera_status(
+                f"Webcam: **connected** — {camera.description}  \n"
+                f"RGB frames are feeding the **{self.config.reconstruction.depth_mode}** depth pipeline.",
+                camera.index,
+            )
+        LOGGER.info(
+            "Started %s source %s",
+            "webcam" if video.camera_info is not None else "video",
+            video.camera_info.description if video.camera_info is not None else video.source,
+        )
 
     def _reset_runtime_state(self) -> None:
         self.capture_queue.clear()
@@ -251,9 +268,25 @@ class RealtimePipeline:
             self.scene.reset()
 
     def handle_command(self, command: str, value: object | None = None) -> None:
-        if command == "start" and value not in (None, ""):
-            source: str | int = int(value) if str(value).isdigit() else str(value)
-            self.start_source(source)
+        if command in {"start", "detect_camera"}:
+            raw_source = "auto" if command == "detect_camera" or value in (None, "") else str(value).strip()
+            source: str | int = int(raw_source) if raw_source.isdigit() else raw_source
+            camera_request = (
+                command == "detect_camera"
+                or raw_source.lower() in AUTO_CAMERA_ALIASES
+                or raw_source.isdigit()
+                or raw_source.startswith("/dev/video")
+            )
+            if camera_request:
+                with self._source_lock:
+                    if self._source is not None and self._source.camera_info is not None:
+                        self._source.close()
+            try:
+                self.start_source(source)
+            except (CameraDetectionError, FileNotFoundError, RuntimeError, ValueError) as exc:
+                LOGGER.warning("Could not start input source %r: %s", source, exc)
+                if self.dashboard is not None:
+                    self.dashboard.update_camera_status(f"Webcam/input error: **{exc}**")
             return
         reset_runtime = False
         with self._source_lock:
@@ -399,8 +432,21 @@ class RealtimePipeline:
                     self.depth.warmup()
                 self._models_ready["depth"] = True
             except Exception as exc:
-                LOGGER.exception("Depth initialization failed")
-                self._errors["depth"] = str(exc)
+                if depth_mode == "video_depth":
+                    LOGGER.warning("Video depth unavailable; using per-frame Depth Anything V2 fallback: %s", exc)
+                    self._errors["video_depth"] = str(exc)
+                    self.depth = MonocularDepthBackend(self.config.reconstruction, self.config.device)
+                    try:
+                        self.depth.load()
+                        with self._gpu_lock:
+                            self.depth.warmup()
+                        self._models_ready["depth"] = True
+                    except Exception as fallback_exc:
+                        LOGGER.exception("Depth fallback initialization failed")
+                        self._errors["depth"] = str(fallback_exc)
+                else:
+                    LOGGER.exception("Depth initialization failed")
+                    self._errors["depth"] = str(exc)
         if depth_mode in {"st4rtrack", "hybrid"}:
             try:
                 self.st4r.load()
@@ -435,6 +481,8 @@ class RealtimePipeline:
                 anchor = None
                 pending_frame = None
                 self.st4r.reset()
+                if hasattr(self.depth, "reset"):
+                    self.depth.reset()
                 reset_counter = self._reset_counter
             now = time.perf_counter()
             st4r_due = now - last_st4r >= 1.0 / max(self.config.reconstruction.frequency_hz, 0.1)

@@ -9,12 +9,34 @@ else
 fi
 PYTHON="${PYTHON:-${DEFAULT_PYTHON}}"
 WITH_ST4RTRACK=0
+WITH_VIDEO_DEPTH=0
 WITH_SAFETY_MODELS=1
 if [[ "${1:-}" == "--st4rtrack" ]]; then
   WITH_ST4RTRACK=1
+elif [[ "${1:-}" == "--video-depth" ]]; then
+  WITH_VIDEO_DEPTH=1
+  WITH_SAFETY_MODELS=0
 elif [[ "${1:-}" == "--viewer" ]]; then
   WITH_ST4RTRACK=1
+  WITH_VIDEO_DEPTH=1
   WITH_SAFETY_MODELS=0
+fi
+
+if [[ "${WITH_VIDEO_DEPTH}" -eq 1 ]]; then
+  mkdir -p "${ROOT_DIR}/third_party"
+  if [[ ! -d "${ROOT_DIR}/third_party/Video-Depth-Anything/.git" ]]; then
+    git clone --depth 1 https://github.com/DepthAnything/Video-Depth-Anything.git \
+      "${ROOT_DIR}/third_party/Video-Depth-Anything"
+  fi
+  "${PYTHON}" - <<'PY'
+from huggingface_hub import hf_hub_download
+
+hf_hub_download(
+    repo_id="depth-anything/Metric-Video-Depth-Anything-Small",
+    filename="metric_video_depth_anything_vits.pth",
+)
+print("Metric Video Depth Anything Small is cached.")
+PY
 fi
 
 cd "${ROOT_DIR}"

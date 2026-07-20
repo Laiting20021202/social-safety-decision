@@ -30,6 +30,12 @@ class ReconstructionConfig:
     model: str = "depth-anything/Depth-Anything-V2-Small-hf"
     st4rtrack_path: str | None = None
     st4rtrack_checkpoint: str | None = None
+    video_depth_path: str | None = None
+    video_depth_checkpoint: str | None = None
+    focal_length_x: float | None = None
+    focal_length_y: float | None = None
+    principal_point_x: float | None = None
+    principal_point_y: float | None = None
     input_size: int = 224
     frequency_hz: float = 2.0
     fast_depth_frequency_hz: float = 10.0

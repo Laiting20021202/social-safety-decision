@@ -20,7 +20,7 @@ def relative_inverse_depth(prediction: np.ndarray, median_distance: float = 3.0)
 
 def depth_to_pointmap(
     depth: np.ndarray,
-    focal_px: float | None = None,
+    focal_px: float | tuple[float, float] | None = None,
     principal_point: tuple[float, float] | None = None,
 ) -> np.ndarray:
     """Project depth into x-right, y-forward, z-up robot coordinates."""
@@ -28,12 +28,17 @@ def depth_to_pointmap(
     if depth.ndim != 2:
         raise ValueError("depth must have shape HxW")
     height, width = depth.shape
-    focal = float(focal_px or 0.85 * max(width, height))
+    if isinstance(focal_px, tuple):
+        focal_x, focal_y = map(float, focal_px)
+    else:
+        focal_x = focal_y = float(focal_px or 0.85 * max(width, height))
+    if focal_x <= 0 or focal_y <= 0:
+        raise ValueError("focal length must be positive")
     cx, cy = principal_point or ((width - 1) * 0.5, (height - 1) * 0.5)
     u, v = np.meshgrid(np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32))
-    x = (u - cx) * depth / focal
+    x = (u - cx) * depth / focal_x
     y = depth
-    z = -(v - cy) * depth / focal
+    z = -(v - cy) * depth / focal_y
     return np.stack((x, y, z), axis=-1).astype(np.float32)
 
 

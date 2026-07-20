@@ -10,6 +10,7 @@ models/
 outputs/
 sessions/
 third_party/St4RTrack/
+third_party/Video-Depth-Anything/
 *.pt
 *.pth
 *.engine

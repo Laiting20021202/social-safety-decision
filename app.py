@@ -15,13 +15,20 @@ from realtime_safety.export.video_recorder import VideoRecorder
 from realtime_safety.gui.dashboard import Dashboard
 from realtime_safety.gui.reconstruction_scene import ReconstructionScene3D
 from realtime_safety.gui.scene_3d import Scene3D
+from realtime_safety.pipeline.video_source import CameraDetectionError
 from realtime_safety.scheduler import RealtimePipeline
 from realtime_safety.utils.validation import validate_config
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Interactive St4RTrack 4D reconstruction viewer and safety dashboard")
+    parser = argparse.ArgumentParser(description="Interactive temporal-depth 4D reconstruction viewer and safety dashboard")
     parser.add_argument("--source", help="Video path, webcam index, or RTSP URL")
+    parser.add_argument(
+        "--auto-webcam",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Automatically detect and start the first readable webcam when --source is omitted",
+    )
     parser.add_argument("--profile", default="st4rtrack_viewer", help="Profile name or YAML path")
     parser.add_argument("--mode", choices=("reconstruction", "safety"), help="Override the profile application mode")
     parser.add_argument(
@@ -31,9 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable/disable YOLO person masks, 3D person boxes, centers, and direction arrows",
     )
     parser.add_argument("--device", default=None, help="cuda, cuda:0, or cpu")
-    parser.add_argument("--depth-mode", choices=("st4rtrack", "hybrid", "fast_depth", "rgbd"))
+    parser.add_argument("--depth-mode", choices=("video_depth", "st4rtrack", "hybrid", "fast_depth", "rgbd"))
     parser.add_argument("--scale-mode", choices=("relative", "calibrated", "rgbd"))
     parser.add_argument("--manual-scale", type=float)
+    parser.add_argument("--focal-x", type=float, help="Webcam intrinsic fx in pixels for 3D reprojection")
+    parser.add_argument("--focal-y", type=float, help="Webcam intrinsic fy in pixels for 3D reprojection")
+    parser.add_argument("--principal-x", type=float, help="Webcam intrinsic cx in pixels")
+    parser.add_argument("--principal-y", type=float, help="Webcam intrinsic cy in pixels")
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
     parser.add_argument("--loop", action="store_true")
@@ -71,6 +82,14 @@ def main() -> int:
             raise ValueError("--manual-scale must be positive")
         config.manual_scale = args.manual_scale
         config.scale_mode = "calibrated"
+    if args.focal_x is not None:
+        config.reconstruction.focal_length_x = args.focal_x
+    if args.focal_y is not None:
+        config.reconstruction.focal_length_y = args.focal_y
+    if args.principal_x is not None:
+        config.reconstruction.principal_point_x = args.principal_x
+    if args.principal_y is not None:
+        config.reconstruction.principal_point_y = args.principal_y
     if args.host:
         config.gui.host = args.host
     if args.port:
@@ -113,8 +132,17 @@ def main() -> int:
         if args.source is not None:
             source = int(args.source) if args.source.isdigit() else args.source
             pipeline.start_source(source, max_frames=args.max_frames)
+        elif args.auto_webcam:
+            try:
+                pipeline.start_source("auto", max_frames=args.max_frames)
+            except (CameraDetectionError, RuntimeError) as exc:
+                if args.headless:
+                    raise
+                logging.info("No readable webcam detected; waiting for a GUI upload or source selection: %s", exc)
+                if dashboard is not None:
+                    dashboard.update_camera_status(f"Webcam: **not detected** — {exc}")
         elif args.headless:
-            raise ValueError("--source is required in headless mode")
+            raise ValueError("--source is required in headless mode when --no-auto-webcam is used")
 
         deadline = time.perf_counter() + args.duration if args.duration else None
         while not shutdown.is_set():

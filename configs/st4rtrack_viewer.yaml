@@ -15,10 +15,11 @@ segmentation:
   frequency_hz: 10.0
   fp16: true
 reconstruction:
-  depth_mode: st4rtrack
+  depth_mode: video_depth
   model: depth-anything/Depth-Anything-V2-Small-hf
   st4rtrack_path: third_party/St4RTrack
-  input_size: 320
+  video_depth_path: third_party/Video-Depth-Anything
+  input_size: 280
   frequency_hz: 12.0
   fast_depth_frequency_hz: 8.0
   max_points: 24000

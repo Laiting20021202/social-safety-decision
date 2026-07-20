@@ -47,7 +47,11 @@ class Dashboard:
         background = 245 if reconstruction_only else 0
         foreground = (55, 55, 55) if reconstruction_only else (220, 220, 220)
         placeholder = np.full((360, 640, 3), background, dtype=np.uint8)
-        message = "Upload a video to reconstruct it in 4D" if reconstruction_only else "Select a source and press Start"
+        message = (
+            "Connect a webcam or upload a video"
+            if reconstruction_only
+            else "Connect a webcam or select a source"
+        )
         cv2.putText(placeholder, message, (55, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.72, foreground, 2)
         with self.server.gui.add_folder("Live Video"):
             label = "RGB input" if reconstruction_only else "Annotated RGB"
@@ -62,16 +66,19 @@ class Dashboard:
     def _build_controls(self) -> None:
         gui = self.server.gui
         with gui.add_folder("Input & Playback", expand_by_default=True):
-            self.file_path = gui.add_text("File / RTSP / webcam", initial_value="")
+            self.file_path = gui.add_text("File / RTSP / webcam", initial_value="auto")
             self.upload = gui.add_upload_button("Upload Video", mime_type="video/*")
             self.start = gui.add_button("Start", color="green")
+            self.detect_camera = gui.add_button("Auto-detect USB webcam", color="blue")
+            self.camera_status = gui.add_markdown("Webcam: **searching automatically on startup**")
             self.pause = gui.add_button("Pause / Resume")
             self.stop = gui.add_button("Stop", color="red")
             self.restart = gui.add_button("Restart")
             self.loop = gui.add_checkbox("Loop", initial_value=False)
             self.speed = gui.add_slider("Playback speed", min=0.1, max=4.0, step=0.1, initial_value=1.0)
             self.seek = gui.add_number("Seek (seconds)", initial_value=0.0, min=0.0)
-        self.start.on_click(lambda _: self._on_command("start", self.file_path.value))
+        self.start.on_click(lambda _: self._on_command("start", self.file_path.value or "auto"))
+        self.detect_camera.on_click(lambda _: self._on_command("detect_camera", None))
         self.pause.on_click(lambda _: self._on_command("pause_resume", None))
         self.stop.on_click(lambda _: self._on_command("stop", None))
         self.restart.on_click(lambda _: self._on_command("restart", None))
@@ -110,6 +117,11 @@ class Dashboard:
         with gui.add_folder("Status", expand_by_default=True):
             initial_status = "**4D reconstruction:** waiting for a video" if self.reconstruction_only else "**System:** IDLE"
             self.status = gui.add_markdown(initial_status)
+
+    def update_camera_status(self, message: str, source: str | int | None = None) -> None:
+        self.camera_status.content = message
+        if source is not None:
+            self.file_path.value = str(source)
 
     def update_video(self, annotated_bgr: np.ndarray) -> None:
         with self._lock:
@@ -175,7 +187,7 @@ class Dashboard:
             detail = next(iter(errors.values()))
             state = f"### Model error\n{detail}"
         else:
-            state = "### Loading model\nThe RGB video remains available while St4RTrack loads."
+            state = "### Loading model\nThe RGB video remains available while the 3D model loads."
         people = (
             f"  \nYOLO people: **{yolo_count}** · tracked 3D boxes: **{people_3d_count}** "
             f"(short hold: **{held_3d_count}**)  \n"

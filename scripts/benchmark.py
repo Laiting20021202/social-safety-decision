@@ -26,7 +26,11 @@ def main() -> int:
     parser.add_argument("--source", required=True)
     parser.add_argument("--profile", default="realtime_fast")
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--depth-mode", choices=("st4rtrack", "hybrid", "fast_depth", "rgbd"), default="fast_depth")
+    parser.add_argument(
+        "--depth-mode",
+        choices=("video_depth", "st4rtrack", "hybrid", "fast_depth", "rgbd"),
+        default="fast_depth",
+    )
     parser.add_argument("--duration", type=float, default=60.0)
     parser.add_argument("--output", default="benchmark_report.json")
     args = parser.parse_args()

@@ -16,6 +16,10 @@ def validate_config(config: AppConfig) -> None:
         raise ValueError("reconstruction.display_confidence_threshold cannot be negative")
     if config.reconstruction.anchor_interval < 0:
         raise ValueError("reconstruction.anchor_interval cannot be negative")
+    for name in ("focal_length_x", "focal_length_y"):
+        value = getattr(config.reconstruction, name)
+        if value is not None and value <= 0:
+            raise ValueError(f"reconstruction.{name} must be positive")
     if config.tracking.visual_hold_updates < 0:
         raise ValueError("tracking.visual_hold_updates cannot be negative")
     if config.gui.history_frames < 1 or config.gui.history_stride < 1:

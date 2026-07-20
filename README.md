@@ -1,6 +1,6 @@
-# Interactive St4RTrack 4D Viewer and Safety System
+# Interactive Temporal 4D Viewer and Safety System
 
-The default application is a clean St4RTrack-style 4D reconstruction viewer with a focused person layer: RGB video in, centered color point clouds in a shared anchor coordinate system out, plus YOLO person masks mapped into robust 3D person centers, wireframe 3D boxes, and short direction arrows. It does **not** render danger volumes, ground/path planning, other object classes, or run the safety worker. The original safety pipeline remains available through the `realtime_fast`, `realtime_balanced`, `realtime_quality`, and `agx` profiles.
+The default application is a clean 4D reconstruction viewer with a focused person layer: RGB video in, temporally consistent color point clouds out, plus YOLO person masks mapped into robust 3D person centers, wireframe 3D boxes, and short direction arrows. The live viewer uses Metric Video Depth Anything Small in streaming mode, so a moving hand is estimated with temporal-attention state from earlier frames instead of an unrelated first-frame anchor. St4RTrack remains selectable. The viewer does **not** render danger volumes, ground/path planning, other object classes, or run the safety worker. The original safety pipeline remains available through the `realtime_fast`, `realtime_balanced`, `realtime_quality`, and `agx` profiles.
 
 ## One-command viewer
 
@@ -25,12 +25,13 @@ The pipeline is designed around one safety rule: stale frames are less useful th
 - Person-mask boundaries and background depth layers are rejected before estimating the robust 3D center and tight percentile box. Only boxes observed in the current YOLO frame are rendered.
 - Confirmed boxes survive up to two missed updates using timestamp-aware 3D prediction, preventing single-frame YOLO misses from flashing the box off and on. The sidebar reports how many boxes are in this short hold state.
 - Walking direction uses recent 3D-center displacement with smoothed Kalman velocity as a sparse-update fallback. ID jumps are re-anchored before they can create a large false arrow.
-- The RTX 4060 Ti viewer profile uses measured 320px St4RTrack input, independent CUDA streams, 24 FPS 640px sidebar video delivery, and sends each 3D frame only once instead of retransmitting it on every video frame.
+- The RTX 4060 Ti viewer profile uses a measured 280px streaming video-depth input, independent CUDA streams, 24 FPS 640px sidebar video delivery, and sends each 3D frame only once instead of retransmitting it on every video frame. A 640×480 USB webcam measured 21.6 display FPS and 11.7 3D FPS in an end-to-end 120-frame run.
 - Live playback uses one persistent WebGL point-cloud/people node set and applies aligned updates atomically. The 64-frame scene history is disabled in this profile because allocating and toggling frame nodes caused visible white flashes in browsers.
-- Outdoor display filtering removes top-connected blue/bright low-texture sky and implausibly near upper-image geometry. Its confidence threshold and 24k hard point budget affect only WebGL output; aligned dense St4RTrack pointmaps remain available for person-center and 3D-box extraction.
+- The optional St4RTrack backend retains outdoor filtering for top-connected blue/bright low-texture sky and implausibly near upper-image geometry. The default temporal-depth backend uses a 24k hard point budget while retaining its aligned dense pointmap for person-center and 3D-box extraction.
 - Persistent YOLO11n-seg CUDA backend in the optional safety profiles; COCO obstacle classes are normalized to person, bicycle, chair, bag, suitcase, vehicle, and related obstacle types.
 - Timestamp-aware stable 2D IDs, short-occlusion association, and between-segmentation prediction.
 - Real Depth Anything V2 Small relative monocular depth point maps; no synthetic point cloud fallback.
+- Real Metric Video Depth Anything Small streaming inference with a persistent multi-frame temporal-attention cache; the cache is reset when the input source changes or restarts.
 - In-memory St4RTrack frame-pair adapter. It directly returns tracking/reconstruction point maps and never writes NPY files.
 - Light-theme 4D viewer with centered color point clouds, automatic initial framing, current-frame playback, optional history display, and a bounded `/frames` scene tree.
 - Mask-to-pointmap 3D clusters plus radius-connected `unknown_obstacle` clustering.
@@ -98,13 +99,19 @@ python3 -m pip install -r requirements_tensorrt.txt
 
 The AGX profile expects an exported `yolo11n-seg.engine`. Export it on the target architecture with Ultralytics before selecting that profile.
 
-## St4RTrack viewer model
+## Viewer depth models
 
 ```bash
 bash scripts/download_models.sh --viewer
 ```
 
-This shallow-clones the official repository into ignored `third_party/St4RTrack` and caches the `yupengchengg147/St4RTrack` sequence checkpoint from Hugging Face. The external code/model has a non-commercial scientific research license; review it before use.
+This shallow-clones the official Video Depth Anything and St4RTrack repositories into ignored `third_party/` folders. It caches the Apache-2.0 Metric Video Depth Anything Small checkpoint and the optional St4RTrack sequence checkpoint. The external St4RTrack code/model has a non-commercial scientific research license; review it before use.
+
+The default `video_depth` backend consumes one live frame at a time but keeps the official streaming model's temporal cache. If its external code or checkpoint is unavailable, the application reports the cause and falls back to per-frame Depth Anything V2. Select the old backend explicitly with:
+
+```bash
+bash scripts/run_viewer.sh --depth-mode st4rtrack
+```
 
 The adapter contract is:
 
@@ -145,11 +152,37 @@ python app.py --source /path/to/test.webm --profile realtime_fast --device cuda
 bash scripts/run_fast.sh /path/to/test.webm
 ```
 
-Webcam:
+USB webcam is detected automatically when `--source` is omitted. The detector
+opens the available camera nodes, rejects metadata-only nodes, and selects the
+first device that produces a real frame. Webcam RGB frames feed the same live
+temporal-depth reconstruction path as uploaded videos:
 
 ```bash
-python app.py --source 0 --profile realtime_fast --device cuda
+bash scripts/run_viewer.sh
+# explicit auto-detection:
+python app.py --source auto --profile st4rtrack_viewer --device cuda
+# explicit device index or Linux device path:
+python app.py --source 0 --profile st4rtrack_viewer --device cuda
+python app.py --source /dev/video0 --profile st4rtrack_viewer --device cuda
 ```
+
+Use `--no-auto-webcam` to keep the GUI idle until a video is uploaded. In the
+GUI, press **Auto-detect USB webcam** to rescan after connecting or reconnecting
+a camera.
+
+If the webcam calibration matrix is `K = [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]`
+at the capture resolution, pass it directly to the point-cloud projection:
+
+```bash
+bash scripts/run_viewer.sh --focal-x 615.2 --focal-y 614.7 --principal-x 319.4 --principal-y 241.1
+```
+
+Accurate intrinsics improve the 3D ray directions (`x` and `z`), especially near
+the image boundary. They cannot by themselves determine a hand's forward depth
+from one RGB camera; the streaming video-depth model supplies the multi-frame
+prior used for that ambiguity. Although this backend uses metric weights, keep
+safety output in relative mode until its scale has been checked against a
+measured distance for this webcam and environment.
 
 Hybrid:
 
@@ -183,7 +216,7 @@ Safety JSONL and trajectory CSV are enabled by default. Use `--no-log` to disabl
 
 | Profile | Mode | 3D input | Maximum displayed points | Intended use |
 |---|---:|---:|---:|---|
-| `st4rtrack_viewer` | Reconstruction + YOLO11s people at 640 | St4RTrack 320 | 60,000 | RTX 4060 Ti live viewer with held person boxes and walking arrows |
+| `st4rtrack_viewer` | Reconstruction + YOLO11s people at 640 | Streaming metric video depth 280 (St4RTrack optional) | 24,000 | RTX 4060 Ti live viewer with held person boxes and walking arrows |
 | `realtime_fast` | Safety + YOLO 320 | Depth/St4 224 | 30,000 | Latency-first safety mode |
 | `realtime_balanced` | Safety + YOLO 416 | Depth/St4 320 | 60,000 | More 3D detail |
 | `realtime_quality` | Safety + YOLO 640 | St4RTrack 512 | 100,000 | Safety visualization quality |
@@ -253,7 +286,8 @@ ROS 2 instructions are in `realtime_safety/ros2_bridge/README.md`.
 
 ## Known limits
 
-- A single monocular RGB stream has no inherent metric scale. Relative depth also has temporal scale/shift noise; the Kalman filter and St4RTrack corrections reduce but do not eliminate it.
+- A single monocular RGB stream remains ambiguous at occlusion boundaries. The streaming metric model substantially improves temporal consistency but is not a substitute for stereo or RGB-D sensing in a certified safety function.
+- The Video Depth Anything streaming implementation is marked experimental by its authors and has lower benchmark accuracy than their offline 32-frame inference. This viewer chooses it because offline inference cannot provide live output.
 - The provided St4RTrack adapter is pairwise feed-forward. Upstream test-time adaptation is intentionally excluded from the real-time path.
 - YOLO11n-seg uses COCO classes and cannot natively distinguish every requested fine-grained class (for example wheelchair versus chair); unmatched geometric clusters are `unknown_obstacle`.
 - Unknown 3D clustering is intentionally low-rate and conservative to protect safety latency.
@@ -267,5 +301,8 @@ ROS 2 instructions are in `realtime_safety/ros2_bridge/README.md`.
 - [Official St4RTrack repository](https://github.com/HavenFeng/St4RTrack)
 - [St4RTrack project page](https://st4rtrack.github.io/)
 - [St4RTrack paper](https://arxiv.org/abs/2504.13152)
+- [Official Video Depth Anything repository](https://github.com/DepthAnything/Video-Depth-Anything)
+- [Video Depth Anything paper](https://arxiv.org/abs/2501.12375)
+- [OpenCV camera calibration](https://docs.opencv.org/4.x/d4/d94/tutorial_camera_calibration.html)
 - [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2)
 - [Viser](https://viser.studio/)
