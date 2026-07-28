@@ -2,6 +2,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from realtime_safety.pipeline import video_source as video_source_module
 from realtime_safety.pipeline.video_source import CameraDevice, PlaybackState, VideoSource, discover_cameras
@@ -107,3 +108,121 @@ def test_webcam_frames_use_capture_time_and_rgb_conversion(monkeypatch) -> None:
     assert frame.rgb[0, 0].tolist() == [0, 0, 255]
     assert capture.released
     assert source.state == PlaybackState.STOPPED
+
+
+def test_http_mjpeg_is_live_and_reconnects_without_ending(monkeypatch) -> None:
+    first = np.full((24, 32, 3), 10, dtype=np.uint8)
+    second = np.full((24, 32, 3), 20, dtype=np.uint8)
+    captures = [FakeCapture([first]), FakeCapture([second])]
+    monkeypatch.setattr(video_source_module, "_open_network_capture", lambda _url: captures.pop(0))
+    source = VideoSource("http://camera.local/stream?topic=/camera/image_raw&type=mjpeg")
+
+    source.open()
+    frame0 = source.read()
+    disconnected = source.read()
+    source._last_reconnect_attempt = 0.0
+    frame1 = source.read()
+    source.close()
+
+    assert source.is_network_stream
+    assert source.is_live
+    assert disconnected is None
+    assert frame0 is not None and frame1 is not None
+    assert frame0.frame_index == 0
+    assert frame1.frame_index == 1
+    assert frame1.bgr[0, 0, 0] == 20
+
+
+def test_unavailable_network_source_stays_running_and_reconnects(monkeypatch) -> None:
+    frame = np.full((24, 32, 3), 30, dtype=np.uint8)
+    captures = [FakeCapture([], opened=False), FakeCapture([frame])]
+    monkeypatch.setattr(video_source_module, "_open_network_capture", lambda _url: captures.pop(0))
+    source = VideoSource("http://camera.local/stream")
+
+    source.open()
+    assert source.state == PlaybackState.RUNNING
+    assert not source.is_connected
+
+    source._last_reconnect_attempt = 0.0
+    recovered = source.read()
+    source.close()
+
+    assert recovered is not None
+    assert recovered.bgr[0, 0, 0] == 30
+
+
+def test_network_reconnect_uses_exponential_backoff(monkeypatch) -> None:
+    frame = np.full((24, 32, 3), 40, dtype=np.uint8)
+    captures = [FakeCapture([frame]), FakeCapture([], opened=False)]
+    monkeypatch.setattr(video_source_module, "_open_network_capture", lambda _url: captures.pop(0))
+    source = VideoSource("http://camera.local/stream")
+
+    source.open()
+    assert source.read() is not None
+    assert source._reconnect_delay == 1.0
+
+    assert source.read() is None
+    assert source._reconnect_delay == 2.0
+    source._last_reconnect_attempt = 0.0
+    assert source.read() is None
+    assert source._reconnect_delay == 4.0
+    source.close()
+
+
+def test_network_reconnect_backoff_is_capped_at_ten_seconds() -> None:
+    source = VideoSource("http://camera.local/stream")
+    source._reconnect_delay = 8.0
+
+    source._schedule_reconnect_backoff(now=123.0)
+
+    assert source._last_reconnect_attempt == 123.0
+    assert source._reconnect_delay == 10.0
+
+
+def test_ros2_image_topic_is_a_live_latest_frame_source(monkeypatch) -> None:
+    bgr = np.full((24, 32, 3), (10, 20, 30), dtype=np.uint8)
+
+    class FakeRosCapture:
+        def __init__(self) -> None:
+            self.started = False
+            self.closed = False
+            self.samples = [(bgr, 123.5, 25.0)]
+
+        @property
+        def is_connected(self) -> bool:
+            return self.started and not self.closed
+
+        def start(self) -> None:
+            self.started = True
+
+        def read_latest(self):
+            return self.samples.pop(0) if self.samples else None
+
+        def close(self) -> None:
+            self.closed = True
+
+    capture = FakeRosCapture()
+    monkeypatch.setattr(video_source_module, "_open_ros2_capture", lambda topic: capture)
+    source = VideoSource("ros2:///koch_remote/camera/image_raw")
+
+    source.open()
+    frame = source.read()
+    duplicate = source.read()
+    source.close()
+
+    assert source.is_ros2_stream
+    assert source.is_remote_stream
+    assert source.is_live
+    assert source.ros2_topic == "/koch_remote/camera/image_raw"
+    assert frame is not None
+    assert frame.frame_index == 0
+    assert frame.source_timestamp == 123.5
+    assert frame.original_fps == 25.0
+    np.testing.assert_array_equal(frame.bgr, bgr)
+    assert duplicate is None
+    assert capture.closed
+
+
+def test_ros2_image_topic_must_be_absolute() -> None:
+    with pytest.raises(ValueError, match="absolute"):
+        VideoSource("ros2://relative/image")

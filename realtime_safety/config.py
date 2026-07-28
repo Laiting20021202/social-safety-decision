@@ -18,10 +18,32 @@ class VideoConfig:
 class SegmentationConfig:
     model: str = "yolo11n-seg.pt"
     input_size: int = 320
+    # Confidence used to create a new, visible detection.
     confidence: float = 0.3
+    # Lower detector floor used by a temporal tracker to recover an existing
+    # person through blur or partial occlusion.
+    tracking_confidence: float = 0.12
+    tracker_config: str | None = None
     iou: float = 0.5
     frequency_hz: float = 10.0
     fp16: bool = True
+    # Suppress detections caused by the camera-mounted robot itself.  The
+    # filter follows the robot's distinctive green links from a small,
+    # camera-fixed base ROI instead of excluding a fixed workspace rectangle.
+    robot_self_filter: bool = False
+    robot_anchor_roi: tuple[float, float, float, float] = (0.38, 0.0, 0.64, 0.28)
+    robot_green_hsv_lower: tuple[int, int, int] = (40, 55, 25)
+    robot_green_hsv_upper: tuple[int, int, int] = (95, 255, 255)
+    robot_mask_dilation_px: int = 14
+    robot_tip_extension_px: int = 34
+    robot_mask_hold_frames: int = 3
+    robot_mask_temporal_frames: int = 3
+    robot_component_link_px: int = 18
+    robot_reject_overlap: float = 0.65
+    robot_reject_min_overlap: float = 0.25
+    robot_min_residual_pixels: int = 80
+    robot_center_ema_alpha: float = 0.25
+    robot_center_hold_frames: int = 12
 
 
 @dataclass(slots=True)
@@ -36,6 +58,14 @@ class ReconstructionConfig:
     focal_length_y: float | None = None
     principal_point_x: float | None = None
     principal_point_y: float | None = None
+    metric_reference_depth_m: float | None = None
+    # Normalized [x_min, y_min, x_max, y_max] around a fixed reference object.
+    metric_reference_roi: tuple[float, float, float, float] = (0.45, 0.35, 0.55, 0.65)
+    # A foreground percentile is more robust than the median when the ROI
+    # contains a small fixed object in front of the background.
+    metric_reference_percentile: float = 20.0
+    metric_reference_warmup_frames: int = 8
+    metric_reference_ema_alpha: float = 0.08
     input_size: int = 224
     frequency_hz: float = 2.0
     fast_depth_frequency_hz: float = 10.0
@@ -44,7 +74,10 @@ class ReconstructionConfig:
     confidence_threshold: float = 0.25
     display_confidence_threshold: float = 0.0
     filter_sky: bool = False
+    # Reject outliers in the model's native output before metric calibration.
     max_relative_depth: float = 20.0
+    # Optional operational range after metric calibration.
+    max_metric_depth_m: float | None = None
     anchor_interval: int = 30
     fp16: bool = True
 
@@ -53,6 +86,13 @@ class ReconstructionConfig:
 class TrackingConfig:
     max_missing: int = 12
     visual_hold_updates: int = 2
+    # A conservative ROS obstacle cloud may outlive the GUI prediction briefly
+    # so a downstream avoidance controller does not see obstacle/no-obstacle
+    # flicker on isolated segmentation or depth failures.
+    obstacle_cloud_hold_updates: int = 12
+    confirmation_hits: int = 3
+    bbox_smoothing_alpha: float = 0.45
+    obstacle_center_max_step_m: float = 0.18
     iou_threshold: float = 0.2
     association_distance: float = 1.5
     dynamic_enter_speed: float = 0.15
@@ -79,7 +119,9 @@ class SafetyConfig:
 class GuiConfig:
     host: str = "127.0.0.1"
     port: int = 8080
+    presentation_mode: bool = False
     max_video_width: int = 960
+    video_fps: float = 24.0
     point_size: float = 0.012
     history_frames: int = 64
     history_stride: int = 4

@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 
 from realtime_safety.config import GuiConfig
-from realtime_safety.types import PointCloudFrame, Track3DState
+from realtime_safety.types import PointCloudFrame, RobotArmState, Track3DState
 
 
 class ReconstructionScene3D:
@@ -35,7 +35,11 @@ class ReconstructionScene3D:
         self.server.initial_camera.fov = np.deg2rad(55.0)
 
         self._frames_root = self.server.scene.add_frame("/frames", show_axes=False)
-        with self.server.gui.add_folder("4D Reconstruction", expand_by_default=True) as folder:
+        with self.server.gui.add_folder(
+            "Scene Layers" if config.presentation_mode else "4D Reconstruction",
+            order=30,
+            expand_by_default=not config.presentation_mode,
+        ) as folder:
             self._folder = folder
             self._show_reconstruction = self.server.gui.add_checkbox("Reconstruction points", initial_value=True)
             self._show_tracking = self.server.gui.add_checkbox("Tracking points", initial_value=False)
@@ -54,12 +58,35 @@ class ReconstructionScene3D:
             )
             self._frame_status = self.server.gui.add_markdown("Waiting for a reconstructed frame…")
 
-        with self.server.gui.add_folder("People · YOLO + 3D", expand_by_default=True) as people_folder:
+        with self.server.gui.add_folder(
+            "Obstacle Tracking" if config.presentation_mode else "Obstacles · YOLO + 3D",
+            order=31,
+            expand_by_default=not config.presentation_mode,
+        ) as people_folder:
             self._people_folder = people_folder
-            self._show_person_boxes = self.server.gui.add_checkbox("3D bounding boxes", initial_value=True)
-            self._show_person_centers = self.server.gui.add_checkbox("Person centers", initial_value=True)
+            self._show_person_boxes = self.server.gui.add_checkbox("3D obstacle volumes", initial_value=True)
+            self._show_person_centers = self.server.gui.add_checkbox("Obstacle centers", initial_value=True)
             self._show_person_directions = self.server.gui.add_checkbox("Direction arrows", initial_value=True)
-            self._people_status = self.server.gui.add_markdown("Waiting for aligned YOLO person masks…")
+            self._show_person_labels = self.server.gui.add_checkbox("Track labels", initial_value=True)
+            self._people_status = self.server.gui.add_markdown("Waiting for aligned YOLO obstacle masks…")
+
+        with self.server.gui.add_folder(
+            "Robot ↔ Obstacle Geometry",
+            order=32,
+            expand_by_default=True,
+        ) as relationship_folder:
+            self._relationship_folder = relationship_folder
+            self._show_robot_center = self.server.gui.add_checkbox(
+                "Robot arm center",
+                initial_value=True,
+            )
+            self._show_relationships = self.server.gui.add_checkbox(
+                "Center-distance links",
+                initial_value=True,
+            )
+            self._relationship_status = self.server.gui.add_markdown(
+                "Waiting for the anchored green Koch arm…"
+            )
 
         self._controls = [
             self._show_reconstruction,
@@ -72,7 +99,11 @@ class ReconstructionScene3D:
             self._show_person_boxes,
             self._show_person_centers,
             self._show_person_directions,
+            self._show_person_labels,
             self._people_status,
+            self._show_robot_center,
+            self._show_relationships,
+            self._relationship_status,
         ]
         self._show_reconstruction.on_update(lambda _: self._refresh_visibility())
         self._show_tracking.on_update(lambda _: self._refresh_visibility())
@@ -83,6 +114,9 @@ class ReconstructionScene3D:
         self._show_person_boxes.on_update(lambda _: self._refresh_visibility())
         self._show_person_centers.on_update(lambda _: self._refresh_visibility())
         self._show_person_directions.on_update(lambda _: self._refresh_visibility())
+        self._show_person_labels.on_update(lambda _: self._refresh_visibility())
+        self._show_robot_center.on_update(lambda _: self._refresh_visibility())
+        self._show_relationships.on_update(lambda _: self._refresh_visibility())
 
         @self.server.on_client_connect
         def _(client: Any) -> None:
@@ -170,7 +204,9 @@ class ReconstructionScene3D:
             if self._follow_latest.value:
                 self._timestep.value = max(last, 0)
             self._frame_status.content = (
-                f"Frame **{frame.frame_index}** · {len(centered_points):,} points · "
+                f"**LIVE · FRAME {frame.frame_index:,}** · {len(centered_points):,} points"
+                if self.config.presentation_mode
+                else f"Frame **{frame.frame_index}** · {len(centered_points):,} points · "
                 f"source: **{frame.source}** · history: **{len(self._frames)}/{self.config.history_frames}**"
             )
             if not defer_visibility:
@@ -178,8 +214,14 @@ class ReconstructionScene3D:
             if self._camera_pose is None:
                 self._configure_camera(centered_points)
 
-    def update_people(self, frame_index: int, tracks: list[Track3DState], yolo_count: int = 0) -> None:
-        """Attach person boxes, robust centers, and velocity arrows to one 4D frame."""
+    def update_people(
+        self,
+        frame_index: int,
+        tracks: list[Track3DState],
+        yolo_count: int = 0,
+        robot_arm: RobotArmState | None = None,
+    ) -> None:
+        """Attach obstacle geometry and robot-to-obstacle relationships."""
         with self._lock:
             if self._closed or self._center is None or frame_index not in self._frames:
                 return
@@ -188,8 +230,8 @@ class ReconstructionScene3D:
             people_handles: dict[str, Any] = frame_handles["people"]
             active: set[str] = set()
             arrow_segments: list[np.ndarray] = []
-            people = [track for track in tracks if track.class_name == "person"]
-            for track in people:
+            obstacles = list(tracks)
+            for track in obstacles:
                 track_id = track.track_id
                 center = np.asarray(track.position_xyz, dtype=np.float32) - self._center
                 dimensions = np.maximum(np.asarray(track.bbox3d.size, dtype=np.float32), 0.03)
@@ -198,7 +240,7 @@ class ReconstructionScene3D:
                 if box_key not in people_handles:
                     people_handles[box_key] = self.server.scene.add_box(
                         f"{scene_path}/people/{track_id}/bbox",
-                        color=(20, 155, 255),
+                        color=_obstacle_color(track.class_name),
                         dimensions=dimensions,
                         wireframe=True,
                         position=center,
@@ -221,6 +263,28 @@ class ReconstructionScene3D:
                 else:
                     people_handles[center_key].position = center
                 active.add(center_key)
+
+                label_key = f"label:{track_id}"
+                label_position = center + np.array((0.0, 0.0, dimensions[2] * 0.56), dtype=np.float32)
+                motion = "MOVING" if track.motion_state == "dynamic" else "STATIONARY"
+                hold = f" · HOLD {track.missing_count}" if track.missing_count else ""
+                label_text = (
+                    f"ID {track_id} · {track.class_name.upper()} · {motion}{hold}"
+                )
+                if label_key not in people_handles:
+                    people_handles[label_key] = self.server.scene.add_label(
+                        f"{scene_path}/people/{track_id}/label",
+                        label_text,
+                        position=label_position,
+                        anchor="bottom-center",
+                        font_size_mode="screen",
+                        font_screen_scale=0.85,
+                        depth_test=False,
+                    )
+                else:
+                    people_handles[label_key].text = label_text
+                    people_handles[label_key].position = label_position
+                active.add(label_key)
 
                 direction = _stable_horizontal_direction(track, dimensions)
                 if direction is not None:
@@ -246,26 +310,170 @@ class ReconstructionScene3D:
                     people_handles[arrow_key].colors = colors
                 active.add(arrow_key)
 
+            self._update_robot_relationship(
+                scene_path,
+                people_handles,
+                active,
+                obstacles,
+                robot_arm,
+            )
+
             for key in list(people_handles):
                 if key not in active:
                     people_handles.pop(key).remove()
+            held = sum(track.missing_count > 0 for track in obstacles)
             self._people_status.content = (
-                f"YOLO people: **{yolo_count}** · tracked 3D boxes: **{len(people)}** · "
-                f"short hold: **{sum(track.missing_count > 0 for track in people)}**  \n"
-                "Pink dot = robust 3D center · green arrow = confirmed consistent motion"
+                f"**{len(obstacles)}/{yolo_count} obstacles localized in 3D** · short hold: **{held}**  \n"
+                "Wireframe = obstacle volume · magenta = stable center · green = motion"
+                if self.config.presentation_mode
+                else f"YOLO obstacles: **{yolo_count}** · tracked 3D boxes: **{len(obstacles)}** · "
+                f"short hold: **{held}**  \n"
+                "Pink dot = stable 3D center · green arrow = confirmed consistent motion"
             )
             self._refresh_visibility_locked()
+
+    def _update_robot_relationship(
+        self,
+        scene_path: str,
+        handles: dict[str, Any],
+        active: set[str],
+        obstacles: list[Track3DState],
+        robot_arm: RobotArmState | None,
+    ) -> None:
+        if robot_arm is None or self._center is None:
+            self._relationship_status.content = (
+                "Robot arm center: **not localized**  \n"
+                "The anchored green component is being reacquired."
+            )
+            return
+
+        robot_center = (
+            np.asarray(robot_arm.center_xyz, dtype=np.float32) - self._center
+        )
+        robot_key = "robot:center"
+        if robot_key not in handles:
+            handles[robot_key] = self.server.scene.add_icosphere(
+                f"{scene_path}/robot/center",
+                radius=0.035,
+                color=(35, 230, 90),
+                subdivisions=2,
+                position=robot_center,
+            )
+        else:
+            handles[robot_key].position = robot_center
+        active.add(robot_key)
+
+        robot_label_key = "robot:label"
+        robot_label = (
+            "KOCH ARM CENTER"
+            + (f" · HOLD {robot_arm.held_frames}" if robot_arm.held_frames else "")
+        )
+        if robot_label_key not in handles:
+            handles[robot_label_key] = self.server.scene.add_label(
+                f"{scene_path}/robot/label",
+                robot_label,
+                position=robot_center + np.array((0.0, 0.0, 0.07), np.float32),
+                anchor="bottom-center",
+                font_size_mode="screen",
+                font_screen_scale=0.8,
+                depth_test=False,
+            )
+        else:
+            handles[robot_label_key].text = robot_label
+            handles[robot_label_key].position = robot_center + np.array(
+                (0.0, 0.0, 0.07),
+                np.float32,
+            )
+        active.add(robot_label_key)
+
+        segments: list[np.ndarray] = []
+        segment_colors: list[tuple[int, int, int]] = []
+        distances: list[tuple[float, Track3DState]] = []
+        for track in obstacles:
+            obstacle_center = (
+                np.asarray(track.position_xyz, dtype=np.float32) - self._center
+            )
+            distance = float(
+                np.linalg.norm(track.position_xyz - robot_arm.center_xyz)
+            )
+            distances.append((distance, track))
+            segments.append(np.stack((robot_center, obstacle_center), axis=0))
+            segment_colors.append(_distance_color(distance))
+            relation_label_key = f"relation:label:{track.track_id}"
+            midpoint = (robot_center + obstacle_center) * 0.5
+            text = f"#{track.track_id} · {distance:.2f} m"
+            if relation_label_key not in handles:
+                handles[relation_label_key] = self.server.scene.add_label(
+                    f"{scene_path}/relationships/{track.track_id}/distance",
+                    text,
+                    position=midpoint,
+                    anchor="bottom-center",
+                    font_size_mode="screen",
+                    font_screen_scale=0.72,
+                    depth_test=False,
+                )
+            else:
+                handles[relation_label_key].text = text
+                handles[relation_label_key].position = midpoint
+            active.add(relation_label_key)
+
+        relation_key = "relation:lines"
+        if segments:
+            points = np.asarray(segments, dtype=np.float32)
+            colors = np.repeat(
+                np.asarray(segment_colors, dtype=np.uint8)[:, None, :],
+                2,
+                axis=1,
+            )
+            if relation_key not in handles:
+                handles[relation_key] = self.server.scene.add_line_segments(
+                    f"{scene_path}/relationships/center_distances",
+                    points=points,
+                    colors=colors,
+                    line_width=3.0,
+                )
+            else:
+                handles[relation_key].points = points
+                handles[relation_key].colors = colors
+            active.add(relation_key)
+
+        if distances:
+            closest_distance, closest = min(distances, key=lambda item: item[0])
+            self._relationship_status.content = (
+                f"Arm center: **({robot_arm.center_xyz[0]:.2f}, "
+                f"{robot_arm.center_xyz[1]:.2f}, {robot_arm.center_xyz[2]:.2f}) m**  \n"
+                f"Nearest obstacle: **ID {closest.track_id} "
+                f"{closest.class_name} · {closest_distance:.2f} m**  \n"
+                f"Robot localization: **{robot_arm.confidence:.0%}**"
+                + (
+                    f" · held **{robot_arm.held_frames}** frames"
+                    if robot_arm.held_frames
+                    else ""
+                )
+            )
+        else:
+            self._relationship_status.content = (
+                f"Arm center: **({robot_arm.center_xyz[0]:.2f}, "
+                f"{robot_arm.center_xyz[1]:.2f}, {robot_arm.center_xyz[2]:.2f}) m**  \n"
+                "No confirmed obstacle center."
+            )
 
     def update_aligned_frame(
         self,
         frame: PointCloudFrame,
         tracks: list[Track3DState],
         yolo_count: int = 0,
+        robot_arm: RobotArmState | None = None,
     ) -> None:
         """Apply point cloud, boxes, centers, and arrows in one client transaction."""
         with self.server.atomic():
             self.update_pointcloud(frame, defer_visibility=True)
-            self.update_people(frame.frame_index, tracks, yolo_count=yolo_count)
+            self.update_people(
+                frame.frame_index,
+                tracks,
+                yolo_count=yolo_count,
+                robot_arm=robot_arm,
+            )
 
     def set_visibility(self, label: str, visible: bool) -> None:
         if label == "Point Cloud":
@@ -285,7 +493,10 @@ class ReconstructionScene3D:
             self._timestep.value = 0
             self._timestep.disabled = True
             self._frame_status.content = "Waiting for a reconstructed frame…"
-            self._people_status.content = "Waiting for aligned YOLO person masks…"
+            self._people_status.content = "Waiting for aligned YOLO obstacle masks…"
+            self._relationship_status.content = (
+                "Waiting for the anchored green Koch arm…"
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -297,6 +508,7 @@ class ReconstructionScene3D:
                 control.remove()
             self._folder.remove()
             self._people_folder.remove()
+            self._relationship_folder.remove()
             self._closed = True
 
     def _on_follow_latest(self) -> None:
@@ -338,6 +550,16 @@ class ReconstructionScene3D:
                         handle.visible = self._show_person_centers.value
                     elif key == "directions":
                         handle.visible = self._show_person_directions.value
+                    elif key.startswith("label:"):
+                        handle.visible = self._show_person_labels.value
+                    elif key == "robot:center":
+                        handle.visible = self._show_robot_center.value
+                    elif key == "robot:label":
+                        handle.visible = self._show_robot_center.value
+                    elif key == "relation:lines":
+                        handle.visible = self._show_relationships.value
+                    elif key.startswith("relation:label:"):
+                        handle.visible = self._show_relationships.value
 
     @staticmethod
     def _remove_frame_handles(handles: dict[str, Any]) -> None:
@@ -375,6 +597,22 @@ def _robust_center(points: np.ndarray) -> np.ndarray:
     interior = np.all((points >= low) & (points <= high), axis=1)
     selected = points[interior] if interior.any() else points
     return np.mean(selected, axis=0, dtype=np.float64).astype(np.float32)
+
+
+def _obstacle_color(class_name: str) -> tuple[int, int, int]:
+    if class_name == "person":
+        return (20, 155, 255)
+    if class_name in {"vehicle", "bicycle", "motorcycle"}:
+        return (255, 155, 35)
+    return (185, 95, 255)
+
+
+def _distance_color(distance_m: float) -> tuple[int, int, int]:
+    if distance_m < 0.30:
+        return (255, 45, 55)
+    if distance_m < 0.60:
+        return (255, 175, 35)
+    return (35, 205, 235)
 
 
 def _stable_horizontal_direction(track: Track3DState, dimensions: np.ndarray) -> np.ndarray | None:

@@ -1,6 +1,11 @@
 import numpy as np
 
-from realtime_safety.pipeline.pointcloud import depth_to_pointmap, relative_inverse_depth, voxel_downsample
+from realtime_safety.pipeline.pointcloud import (
+    ReferenceDepthCalibrator,
+    depth_to_pointmap,
+    relative_inverse_depth,
+    voxel_downsample,
+)
 
 
 def test_depth_projection_coordinate_convention() -> None:
@@ -27,3 +32,43 @@ def test_voxel_and_max_count_are_bounded() -> None:
     assert result.shape == (5, 3)
     assert result_colors.shape == (5, 3)
     assert result_confidence.shape == (5,)
+
+
+def test_reference_depth_calibrator_recovers_metric_scale_and_rejects_occlusion() -> None:
+    calibrator = ReferenceDepthCalibrator(
+        target_depth_m=0.4,
+        roi=(0.4, 0.3, 0.6, 0.7),
+        percentile=20.0,
+        warmup_frames=3,
+        ema_alpha=0.1,
+    )
+    depth = np.full((100, 100), 3.0, dtype=np.float32)
+    depth[30:70, 40:60] = 1.0
+
+    for _ in range(3):
+        scale = calibrator.update(depth)
+
+    assert calibrator.ready
+    assert np.isclose(scale, 0.4)
+    assert np.isclose(calibrator.observed_depth, 1.0)
+
+    occluded = depth.copy()
+    occluded[30:70, 40:60] = 0.2
+    assert np.isclose(calibrator.update(occluded), 0.4)
+
+
+def test_reference_depth_calibrator_can_freeze_scale_after_warmup() -> None:
+    calibrator = ReferenceDepthCalibrator(
+        target_depth_m=0.4,
+        roi=(0.4, 0.3, 0.6, 0.7),
+        percentile=20.0,
+        warmup_frames=2,
+        ema_alpha=0.0,
+    )
+    initial = np.ones((100, 100), dtype=np.float32)
+    assert np.isclose(calibrator.update(initial), 0.4)
+    assert np.isclose(calibrator.update(initial), 0.4)
+    assert calibrator.ready
+
+    drifted = np.full((100, 100), 1.1, dtype=np.float32)
+    assert np.isclose(calibrator.update(drifted), 0.4)

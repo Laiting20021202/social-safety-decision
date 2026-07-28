@@ -9,7 +9,12 @@ import cv2
 import numpy as np
 
 from realtime_safety.config import ReconstructionConfig
-from realtime_safety.pipeline.pointcloud import depth_to_pointmap, resize_for_pointmap, voxel_downsample
+from realtime_safety.pipeline.pointcloud import (
+    ReferenceDepthCalibrator,
+    depth_to_pointmap,
+    resize_for_pointmap,
+    voxel_downsample,
+)
 from realtime_safety.types import FramePacket, PointCloudFrame
 from realtime_safety.utils.timing import CudaEventTimer
 
@@ -31,6 +36,18 @@ class VideoDepthBackend:
         self.device = "cpu"
         self.model = None
         self.last_gpu_ms = 0.0
+        self._stream_shape: tuple[int, int] | None = None
+        self._reference_calibrator = (
+            ReferenceDepthCalibrator(
+                config.metric_reference_depth_m,
+                config.metric_reference_roi,
+                config.metric_reference_percentile,
+                config.metric_reference_warmup_frames,
+                config.metric_reference_ema_alpha,
+            )
+            if config.metric_reference_depth_m is not None
+            else None
+        )
 
     @property
     def available(self) -> bool:
@@ -100,6 +117,19 @@ class VideoDepthBackend:
         if self.model is None:
             raise RuntimeError("Video depth model has not been loaded")
 
+        stream_shape = tuple(frame.rgb.shape[:2])
+        if self._stream_shape is not None and stream_shape != self._stream_shape:
+            previous_shape = self._stream_shape
+            self.reset()
+            LOGGER.warning(
+                "Video stream resolution changed from %sx%s to %sx%s; reset temporal depth state",
+                previous_shape[1],
+                previous_shape[0],
+                stream_shape[1],
+                stream_shape[0],
+            )
+        self._stream_shape = stream_shape
+
         start = time.perf_counter()
         timer = CudaEventTimer(self.device.startswith("cuda"))
         with timer:
@@ -119,14 +149,36 @@ class VideoDepthBackend:
                 interpolation=cv2.INTER_LINEAR,
             )
 
-        focal_x, focal_y, center = self._camera_intrinsics(depth.shape, frame.rgb.shape[:2])
-        pointmap = depth_to_pointmap(depth, (focal_x, focal_y), center)
-        confidence = _temporal_depth_confidence(depth)
-        valid = (
+        # Preserve the model-native validity gate. Applying this threshold only
+        # after multiplying by a scale smaller than one would accidentally
+        # admit very large raw edge outliers back into the point cloud.
+        raw_valid = (
             np.isfinite(depth)
             & (depth > 0.05)
             & (depth < self.config.max_relative_depth)
         )
+        confidence = _temporal_depth_confidence(depth)
+        metric_scale = None
+        observed_reference_depth = None
+        if self._reference_calibrator is not None:
+            was_ready = self._reference_calibrator.ready
+            metric_scale = self._reference_calibrator.update(depth)
+            observed_reference_depth = self._reference_calibrator.observed_depth
+            depth = depth * metric_scale
+            if self._reference_calibrator.ready and not was_ready:
+                LOGGER.info(
+                    "Metric depth reference calibrated: target=%.3f m, observed=%.3f, scale=%.5f, roi=%s",
+                    self._reference_calibrator.target_depth_m,
+                    observed_reference_depth,
+                    metric_scale,
+                    self._reference_calibrator.roi,
+                )
+
+        focal_x, focal_y, center = self._camera_intrinsics(depth.shape, frame.rgb.shape[:2])
+        pointmap = depth_to_pointmap(depth, (focal_x, focal_y), center)
+        valid = raw_valid & np.isfinite(depth) & (depth > 0.05)
+        if self.config.max_metric_depth_m is not None:
+            valid &= depth < self.config.max_metric_depth_m
         points, colors, selected_confidence = voxel_downsample(
             pointmap[valid],
             pointmap_rgb[valid],
@@ -144,11 +196,25 @@ class VideoDepthBackend:
             anchor_frame_index=frame.frame_index,
             inference_ms=(time.perf_counter() - start) * 1000.0,
             valid=len(points) > 0,
-            source="video_depth_anything_metric",
+            source=(
+                "video_depth_anything_metric_reference_calibrated"
+                if self._reference_calibrator is not None
+                else "video_depth_anything_metric"
+            ),
             dense_confidence=confidence,
+            metric_scale=metric_scale,
+            reference_depth_m=(
+                self._reference_calibrator.target_depth_m
+                if self._reference_calibrator is not None
+                else None
+            ),
+            reference_observed_depth=observed_reference_depth,
         )
 
     def reset(self) -> None:
+        self._stream_shape = None
+        if self._reference_calibrator is not None:
+            self._reference_calibrator.reset()
         if self.model is None:
             return
         # These are the state variables defined by upstream's streaming API.

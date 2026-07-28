@@ -47,6 +47,8 @@ class Detection2D:
     mask: np.ndarray | None = None
     track_id: int | None = None
     track_hits: int = 1
+    track_missing: int = 0
+    is_prediction: bool = False
     velocity_xy: np.ndarray = field(default_factory=lambda: np.zeros(2, dtype=np.float32))
     image_size: tuple[int, int] | None = None
 
@@ -66,6 +68,23 @@ class PointCloudFrame:
     tracking_points: np.ndarray | None = None
     camera_transform: np.ndarray | None = None
     dense_confidence: np.ndarray | None = None
+    metric_scale: float | None = None
+    reference_depth_m: float | None = None
+    reference_observed_depth: float | None = None
+
+
+@dataclass(slots=True)
+class RobotArmState:
+    """Camera-aligned estimate of the visible Koch arm."""
+
+    center_xyz: np.ndarray
+    center_xy: np.ndarray
+    image_size: tuple[int, int]
+    mask_pixels: int
+    point_count: int
+    confidence: float
+    timestamp: float
+    held_frames: int = 0
 
 
 @dataclass(slots=True)
@@ -172,6 +191,7 @@ class PipelineSnapshot:
     annotated_bgr: np.ndarray | None = None
     detections: list[Detection2D] = field(default_factory=list)
     pointcloud: PointCloudFrame | None = None
+    robot_arm: RobotArmState | None = None
     people: list[Track3DState] = field(default_factory=list)
     safety: SafetySnapshot | None = None
     performance: PerformanceSnapshot = field(default_factory=PerformanceSnapshot)

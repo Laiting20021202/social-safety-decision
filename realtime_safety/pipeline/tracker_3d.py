@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from realtime_safety.config import TrackingConfig
-from realtime_safety.types import ObstacleObservation3D, Track3DState
+from realtime_safety.types import BBox3D, ObstacleObservation3D, Track3DState
 
 
 @dataclass(slots=True)
@@ -13,6 +13,9 @@ class _Filter:
     observation: ObstacleObservation3D
     x: np.ndarray
     covariance: np.ndarray
+    bbox_minimum: np.ndarray
+    bbox_maximum: np.ndarray
+    radius: float
     acceleration: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float64))
     hits: int = 1
     missing: int = 0
@@ -44,6 +47,9 @@ class Tracker3D:
                     observation=observation,
                     x=x,
                     covariance=np.eye(6, dtype=np.float64) * 0.5,
+                    bbox_minimum=observation.bbox3d.minimum.copy(),
+                    bbox_maximum=observation.bbox3d.maximum.copy(),
+                    radius=observation.radius,
                     history=[observation.position_xyz.copy()],
                     filter_timestamp=observation.timestamp,
                 )
@@ -52,18 +58,41 @@ class Tracker3D:
             dt = max(float(observation.timestamp - track.observation.timestamp), 1e-3)
             if observation.class_name == "person" and track.hits >= 2:
                 jump = float(np.linalg.norm(observation.position_xyz - track.observation.position_xyz))
-                jump_gate = max(0.12, 1.25 * max(observation.radius, track.observation.radius))
+                jump_gate = max(
+                    float(self.config.obstacle_center_max_step_m),
+                    1.25 * max(observation.radius, track.observation.radius),
+                )
                 if jump > jump_gate:
-                    # A sparse-frame 2D ID switch must not become a giant 3D
-                    # velocity vector. Re-anchor at zero velocity instead.
-                    self._filters[track_id] = _Filter(
-                        observation=observation,
-                        x=np.r_[observation.position_xyz, np.zeros(3)].astype(np.float64),
-                        covariance=np.eye(6, dtype=np.float64) * 0.5,
-                        history=[observation.position_xyz.copy()],
-                        filter_timestamp=observation.timestamp,
+                    # Limit a one-frame monocular-depth jump. Re-anchoring the
+                    # filter made the GUI and downstream obstacle center flash.
+                    direction = (
+                        observation.position_xyz - track.observation.position_xyz
                     )
-                    continue
+                    limited_position = (
+                        track.observation.position_xyz
+                        + direction * (jump_gate / jump)
+                    ).astype(np.float32)
+                    correction = limited_position - observation.position_xyz
+                    points = (
+                        None
+                        if observation.points is None
+                        else np.asarray(observation.points, dtype=np.float32)
+                        + correction
+                    )
+                    observation = ObstacleObservation3D(
+                        track_id=observation.track_id,
+                        class_name=observation.class_name,
+                        confidence=observation.confidence,
+                        position_xyz=limited_position,
+                        bbox3d=BBox3D(
+                            minimum=observation.bbox3d.minimum + correction,
+                            maximum=observation.bbox3d.maximum + correction,
+                        ),
+                        radius=observation.radius,
+                        point_count=observation.point_count,
+                        timestamp=observation.timestamp,
+                        points=points,
+                    )
             previous_velocity = track.x[3:].copy()
             measured_velocity = (observation.position_xyz - track.observation.position_xyz) / dt
             prediction_dt = max(observation.timestamp - track.filter_timestamp, 0.0)
@@ -75,6 +104,19 @@ class Tracker3D:
             track.x[3:] = (1.0 - gain) * track.x[3:] + gain * measured_velocity
             measured_acceleration = (track.x[3:] - previous_velocity) / dt
             track.acceleration = 0.8 * track.acceleration + 0.2 * measured_acceleration
+            bbox_alpha = float(self.config.bbox_smoothing_alpha)
+            track.bbox_minimum = (
+                (1.0 - bbox_alpha) * track.bbox_minimum
+                + bbox_alpha * observation.bbox3d.minimum
+            ).astype(np.float32)
+            track.bbox_maximum = (
+                (1.0 - bbox_alpha) * track.bbox_maximum
+                + bbox_alpha * observation.bbox3d.maximum
+            ).astype(np.float32)
+            track.radius = (
+                (1.0 - bbox_alpha) * track.radius
+                + bbox_alpha * observation.radius
+            )
             track.observation = observation
             track.hits += 1
             track.missing = 0
@@ -151,6 +193,9 @@ class Tracker3D:
 
     @staticmethod
     def _state(track_id: int, track: _Filter) -> Track3DState:
+        predicted_offset = (
+            track.x[:3] - track.observation.position_xyz
+        ).astype(np.float32)
         return Track3DState(
             track_id=track_id,
             class_name=track.observation.class_name,
@@ -158,8 +203,11 @@ class Tracker3D:
             velocity_xyz=track.x[3:].astype(np.float32).copy(),
             acceleration_xyz=track.acceleration.astype(np.float32).copy(),
             covariance=track.covariance.copy(),
-            bbox3d=track.observation.bbox3d,
-            radius=track.observation.radius,
+            bbox3d=BBox3D(
+                minimum=track.bbox_minimum + predicted_offset,
+                maximum=track.bbox_maximum + predicted_offset,
+            ),
+            radius=track.radius,
             hit_count=track.hits,
             missing_count=track.missing,
             last_timestamp=track.observation.timestamp,

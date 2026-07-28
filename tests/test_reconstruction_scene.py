@@ -5,7 +5,12 @@ import viser
 
 from realtime_safety.config import GuiConfig
 from realtime_safety.gui.reconstruction_scene import ReconstructionScene3D, _stable_horizontal_direction
-from realtime_safety.types import BBox3D, PointCloudFrame, Track3DState
+from realtime_safety.types import (
+    BBox3D,
+    PointCloudFrame,
+    RobotArmState,
+    Track3DState,
+)
 
 
 def _free_port() -> int:
@@ -68,7 +73,7 @@ def test_reconstruction_history_is_centered_and_bounded() -> None:
             )
         ],
     )
-    assert scene.node_count == 13  # box, robust center marker, and direction-arrow handle
+    assert scene.node_count == 14  # box, center, track label, and direction-arrow handle
     scene.reset()
     assert scene.frame_count == 0
     assert scene.node_count == 1
@@ -118,5 +123,91 @@ def test_live_mode_reuses_one_persistent_webgl_pointcloud() -> None:
     assert id(current_handles["reconstruction"]) == reconstruction_id
     assert id(current_handles["root"]) == root_id
     assert current_handles["root"].visible
+    scene.close()
+    server.stop()
+
+
+def test_robot_and_obstacle_centers_have_visible_metric_relationship() -> None:
+    server = viser.ViserServer(host="127.0.0.1", port=_free_port(), verbose=False)
+    scene = ReconstructionScene3D(
+        server,
+        GuiConfig(history_frames=1, presentation_mode=True),
+    )
+    cloud = _cloud(2)
+    obstacle_center = np.array((4.3, 8.2, -1.9), dtype=np.float32)
+    track = Track3DState(
+        track_id=5,
+        class_name="person",
+        position_xyz=obstacle_center,
+        velocity_xyz=np.zeros(3, dtype=np.float32),
+        acceleration_xyz=np.zeros(3, dtype=np.float32),
+        covariance=np.eye(6),
+        bbox3d=BBox3D(obstacle_center - 0.2, obstacle_center + 0.2),
+        radius=0.3,
+        hit_count=5,
+        missing_count=0,
+        last_timestamp=2.0,
+        motion_state="static",
+        confidence=0.9,
+    )
+    robot = RobotArmState(
+        center_xyz=np.array((4.0, 8.0, -2.0), dtype=np.float32),
+        center_xy=np.array((160.0, 80.0), dtype=np.float32),
+        image_size=(320, 240),
+        mask_pixels=500,
+        point_count=120,
+        confidence=0.95,
+        timestamp=2.0,
+    )
+
+    scene.update_aligned_frame(
+        cloud,
+        [track],
+        yolo_count=1,
+        robot_arm=robot,
+    )
+
+    handles = next(iter(scene._frames.values()))["people"]
+    assert "robot:center" in handles
+    assert "relation:lines" in handles
+    assert "relation:label:5" in handles
+    assert "0.37 m" in scene._relationship_status.content
+    scene.close()
+    server.stop()
+
+
+def test_new_depth_frame_preserves_confirmed_geometry_until_yolo_catches_up() -> None:
+    server = viser.ViserServer(host="127.0.0.1", port=_free_port(), verbose=False)
+    scene = ReconstructionScene3D(
+        server,
+        GuiConfig(history_frames=1, presentation_mode=True),
+    )
+    center = np.array((4.2, 8.1, -1.9), dtype=np.float32)
+    track = Track3DState(
+        track_id=12,
+        class_name="person",
+        position_xyz=center,
+        velocity_xyz=np.zeros(3, dtype=np.float32),
+        acceleration_xyz=np.zeros(3, dtype=np.float32),
+        covariance=np.eye(6),
+        bbox3d=BBox3D(center - 0.2, center + 0.2),
+        radius=0.3,
+        hit_count=4,
+        missing_count=0,
+        last_timestamp=1.0,
+        motion_state="static",
+        confidence=0.9,
+    )
+    scene.update_aligned_frame(_cloud(1), [track], yolo_count=1)
+    handles_before = next(iter(scene._frames.values()))["people"]
+    box_handle = handles_before["box:12"]
+
+    # The depth renderer may run before the matching YOLO worker. Updating the
+    # persistent cloud must not remove the last confirmed obstacle.
+    scene.update_pointcloud(_cloud(2))
+
+    handles_after = next(iter(scene._frames.values()))["people"]
+    assert handles_after["box:12"] is box_handle
+    assert "center:12" in handles_after
     scene.close()
     server.stop()

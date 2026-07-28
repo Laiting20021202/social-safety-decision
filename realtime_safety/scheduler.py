@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import queue
 import threading
 import time
@@ -21,6 +22,8 @@ from realtime_safety.pipeline.ground_plane import GroundPlaneEstimator
 from realtime_safety.pipeline.local_planner import LocalSafetyPlanner, PlannerResult
 from realtime_safety.pipeline.monocular_depth import MonocularDepthBackend
 from realtime_safety.pipeline.obstacle_3d import ObstacleExtractor3D
+from realtime_safety.pipeline.pointcloud import voxel_downsample
+from realtime_safety.pipeline.robot_self_filter import RobotSelfFilter
 from realtime_safety.pipeline.safety_decision import SafetyDecisionEngine
 from realtime_safety.pipeline.segmentation import SegmentationBackend, create_segmentation_backend
 from realtime_safety.pipeline.st4rtrack_adapter import St4RTrackAdapter
@@ -30,17 +33,260 @@ from realtime_safety.pipeline.traversable_region import TraversableRegion, compu
 from realtime_safety.pipeline.video_source import AUTO_CAMERA_ALIASES, CameraDetectionError, PlaybackState, VideoSource
 from realtime_safety.pipeline.video_depth import VideoDepthBackend
 from realtime_safety.types import (
+    BBox3D,
     Detection2D,
     FramePacket,
+    ObstacleObservation3D,
     PipelineSnapshot,
     PointCloudFrame,
     RecommendedAction,
+    RobotArmState,
     SafetyLevel,
     Track3DState,
 )
 from realtime_safety.utils.gpu import gpu_info, release_gpu_memory
 
 LOGGER = logging.getLogger(__name__)
+
+
+_OBSTACLE_COLORS: dict[str, tuple[int, int, int]] = {
+    "person": (255, 64, 64),
+    "bicycle": (255, 160, 32),
+    "motorcycle": (255, 192, 32),
+    "vehicle": (255, 224, 32),
+    "chair": (192, 96, 255),
+    "bag": (255, 96, 192),
+    "suitcase": (96, 192, 255),
+    "bench": (96, 255, 160),
+    "dog": (64, 224, 255),
+    "cat": (64, 224, 255),
+}
+
+
+def _observation_pointcloud(
+    observations: list[ObstacleObservation3D],
+    source_cloud: PointCloudFrame,
+    max_points: int,
+) -> PointCloudFrame:
+    """Aggregate YOLO-mask 3D clusters into one color-coded PointCloudFrame."""
+
+    point_groups: list[np.ndarray] = []
+    color_groups: list[np.ndarray] = []
+    confidence_groups: list[np.ndarray] = []
+    for observation in observations:
+        if observation.points is None or len(observation.points) == 0:
+            continue
+        points = np.asarray(observation.points, dtype=np.float32).reshape(-1, 3)
+        color = _OBSTACLE_COLORS.get(observation.class_name, (64, 255, 255))
+        point_groups.append(points)
+        color_groups.append(np.tile(np.asarray(color, dtype=np.uint8), (len(points), 1)))
+        confidence_groups.append(
+            np.full(len(points), observation.confidence, dtype=np.float32)
+        )
+
+    if point_groups:
+        points = np.concatenate(point_groups, axis=0)
+        colors = np.concatenate(color_groups, axis=0)
+        confidence = np.concatenate(confidence_groups, axis=0)
+        if len(points) > max_points:
+            selected = np.linspace(0, len(points) - 1, max_points, dtype=np.int64)
+            points, colors, confidence = (
+                points[selected],
+                colors[selected],
+                confidence[selected],
+            )
+    else:
+        points = np.empty((0, 3), dtype=np.float32)
+        colors = np.empty((0, 3), dtype=np.uint8)
+        confidence = np.empty((0,), dtype=np.float32)
+
+    return PointCloudFrame(
+        points=points,
+        colors=colors,
+        confidence=confidence,
+        pointmap=source_cloud.pointmap,
+        frame_index=source_cloud.frame_index,
+        timestamp=source_cloud.timestamp,
+        anchor_frame_index=source_cloud.anchor_frame_index,
+        inference_ms=source_cloud.inference_ms,
+        valid=len(points) > 0,
+        source="yolo_obstacles",
+        metric_scale=source_cloud.metric_scale,
+        reference_depth_m=source_cloud.reference_depth_m,
+        reference_observed_depth=source_cloud.reference_observed_depth,
+    )
+
+
+def _observations_with_short_hold(
+    observations: list[ObstacleObservation3D],
+    tracks: list[Track3DState],
+    cache: dict[int, ObstacleObservation3D],
+    max_missing: int,
+    timestamp: float,
+    voxel_size: float = 0.0,
+    max_center_step_m: float = 0.18,
+) -> list[ObstacleObservation3D]:
+    """Stabilize measured clusters and keep them across brief detector misses."""
+
+    result: list[ObstacleObservation3D] = []
+    observed_ids = {observation.track_id for observation in observations}
+    for observation in observations:
+        previous = cache.get(observation.track_id)
+        stabilized = _fuse_obstacle_observation(
+            previous,
+            observation,
+            voxel_size=voxel_size,
+            max_center_step_m=max_center_step_m,
+        )
+        cache[observation.track_id] = stabilized
+        result.append(stabilized)
+
+    active_ids = {track.track_id for track in tracks}
+    for track in tracks:
+        if (
+            track.track_id in observed_ids
+            or track.missing_count <= 0
+            or track.missing_count > max_missing
+        ):
+            continue
+        previous = cache.get(track.track_id)
+        if previous is None or previous.points is None or not len(previous.points):
+            continue
+        displacement = np.asarray(track.position_xyz - previous.position_xyz, dtype=np.float32)
+        distance = float(np.linalg.norm(displacement))
+        # Short holds prevent flicker, but a noisy monocular velocity must not
+        # launch a stale obstacle cluster across the scene.
+        if distance > 0.35:
+            displacement *= 0.35 / distance
+        points = np.asarray(previous.points, dtype=np.float32) + displacement
+        result.append(
+            ObstacleObservation3D(
+                track_id=track.track_id,
+                class_name=track.class_name,
+                confidence=max(0.05, previous.confidence * 0.85**track.missing_count),
+                position_xyz=previous.position_xyz + displacement,
+                bbox3d=BBox3D(
+                    minimum=previous.bbox3d.minimum + displacement,
+                    maximum=previous.bbox3d.maximum + displacement,
+                ),
+                radius=previous.radius,
+                point_count=len(points),
+                timestamp=timestamp,
+                points=points,
+            )
+        )
+        cache[track.track_id] = result[-1]
+
+    for track_id in tuple(cache):
+        if track_id not in active_ids:
+            del cache[track_id]
+    return result
+
+
+def _fuse_obstacle_observation(
+    previous: ObstacleObservation3D | None,
+    current: ObstacleObservation3D,
+    voxel_size: float,
+    max_center_step_m: float = 0.18,
+    max_points: int = 3000,
+) -> ObstacleObservation3D:
+    """Fill transient mask/depth holes using the previous aligned track cloud."""
+
+    if (
+        previous is None
+        or previous.points is None
+        or not len(previous.points)
+        or current.points is None
+        or not len(current.points)
+        or previous.class_name != current.class_name
+    ):
+        return current
+    displacement = np.asarray(
+        current.position_xyz - previous.position_xyz,
+        dtype=np.float32,
+    )
+    distance = float(np.linalg.norm(displacement))
+    maximum_step = max(
+        float(max_center_step_m),
+        0.75 * min(float(current.radius), float(previous.radius)),
+    )
+    if distance > maximum_step:
+        # Monocular depth occasionally moves a whole mask layer between two
+        # frames. Rate-limit that geometry jump instead of flashing the cloud
+        # at two unrelated depths.
+        limited = displacement * (maximum_step / distance)
+        corrected_center = previous.position_xyz + limited
+        correction = corrected_center - current.position_xyz
+        corrected_points = (
+            np.asarray(current.points, dtype=np.float32).reshape(-1, 3)
+            + correction
+        )
+        current = ObstacleObservation3D(
+            track_id=current.track_id,
+            class_name=current.class_name,
+            confidence=current.confidence,
+            position_xyz=corrected_center.astype(np.float32),
+            bbox3d=BBox3D(
+                minimum=current.bbox3d.minimum + correction,
+                maximum=current.bbox3d.maximum + correction,
+            ),
+            radius=current.radius,
+            point_count=len(corrected_points),
+            timestamp=current.timestamp,
+            points=corrected_points,
+        )
+        displacement = limited
+    # A large jump is more likely an ID switch or a bad monocular depth frame;
+    # never smear the old obstacle across that jump.
+    maximum_fusion_shift = max(0.20, 1.5 * current.radius)
+    if float(np.linalg.norm(displacement)) > maximum_fusion_shift:
+        return current
+
+    current_points = np.asarray(current.points, dtype=np.float32).reshape(-1, 3)
+    previous_points = (
+        np.asarray(previous.points, dtype=np.float32).reshape(-1, 3) + displacement
+    )
+    margin = max(0.04, min(0.12, 0.2 * current.radius))
+    lower = current.bbox3d.minimum - margin
+    upper = current.bbox3d.maximum + margin
+    previous_points = previous_points[
+        np.all((previous_points >= lower) & (previous_points <= upper), axis=1)
+    ]
+    if not len(previous_points):
+        return current
+
+    # Current points are first, so deterministic voxel selection always favors
+    # new geometry; old geometry only fills holes inside the current volume.
+    combined = np.concatenate((current_points, previous_points), axis=0)
+    confidence = np.concatenate(
+        (
+            np.full(len(current_points), current.confidence, dtype=np.float32),
+            np.full(
+                len(previous_points),
+                previous.confidence * 0.8,
+                dtype=np.float32,
+            ),
+        )
+    )
+    points, _, _ = voxel_downsample(
+        combined,
+        np.zeros((len(combined), 3), dtype=np.uint8),
+        confidence,
+        max(float(voxel_size), 0.0),
+        max_points=max_points,
+    )
+    minimum, maximum = np.percentile(points, (5.0, 95.0), axis=0).astype(np.float32)
+    return ObstacleObservation3D(
+        track_id=current.track_id,
+        class_name=current.class_name,
+        confidence=current.confidence,
+        position_xyz=current.position_xyz.copy(),
+        bbox3d=BBox3D(minimum=minimum, maximum=maximum),
+        radius=current.radius,
+        point_count=len(points),
+        timestamp=current.timestamp,
+        points=points,
+    )
 
 
 @dataclass(slots=True)
@@ -129,10 +375,19 @@ class RealtimePipeline:
         scene: Any | None = None,
         session_logger: Any | None = None,
         video_recorder: Any | None = None,
+        pointcloud_publisher: Any | None = None,
+        yolo_obstacle_pointcloud_publisher: Any | None = None,
+        arm_obstacle_relationship_publisher: Any | None = None,
+        camera_preview_publisher: Any | None = None,
     ) -> None:
         self.config = config
         self.segmentation = segmentation_backend
-        if self.segmentation is None and (config.mode == "safety" or config.people_overlay):
+        if self.segmentation is None and (
+            config.mode == "safety"
+            or config.people_overlay
+            or yolo_obstacle_pointcloud_publisher is not None
+            or arm_obstacle_relationship_publisher is not None
+        ):
             self.segmentation = create_segmentation_backend(config.segmentation, config.device)
         self.depth = depth_backend or (
             VideoDepthBackend(config.reconstruction, config.device)
@@ -144,6 +399,12 @@ class RealtimePipeline:
         self.scene = scene
         self.session_logger = session_logger
         self.video_recorder = video_recorder
+        self.pointcloud_publisher = pointcloud_publisher
+        self.yolo_obstacle_pointcloud_publisher = yolo_obstacle_pointcloud_publisher
+        self.arm_obstacle_relationship_publisher = (
+            arm_obstacle_relationship_publisher
+        )
+        self.camera_preview_publisher = camera_preview_publisher
         self.gui_state = GuiState()
         self.performance = PerformanceMonitor(config.device)
         self.adaptive = AdaptiveRealtimeController(config)
@@ -158,6 +419,7 @@ class RealtimePipeline:
         self._cloud_version = 0
         self._people_tracks: list[Track3DState] = []
         self._people_detections: list[Detection2D] = []
+        self._robot_arm: RobotArmState | None = None
         self._people_detection_frame: FramePacket | None = None
         self._people_version = 0
         self._people_cloud_version = -1
@@ -168,6 +430,7 @@ class RealtimePipeline:
         self._planner_result = PlannerResult([], None, RecommendedAction.WAIT)
         self._source: VideoSource | None = None
         self._stop_event = threading.Event()
+        self._new_frame_event = threading.Event()
         self._source_done = threading.Event()
         self._capture_complete = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -195,14 +458,32 @@ class RealtimePipeline:
     def start_workers(self) -> None:
         if self._running:
             return
+        if self.pointcloud_publisher is not None:
+            self.pointcloud_publisher.start()
+        if self.yolo_obstacle_pointcloud_publisher is not None:
+            self.yolo_obstacle_pointcloud_publisher.start()
+        if self.arm_obstacle_relationship_publisher is not None:
+            self.arm_obstacle_relationship_publisher.start()
+        if self.camera_preview_publisher is not None:
+            self.camera_preview_publisher.start()
         self._stop_event.clear()
+        self._new_frame_event.clear()
         if self.config.mode == "reconstruction":
             targets_list = [
                 ("capture-worker", self._capture_worker),
                 ("3d-reconstruction-worker", self._reconstruction_worker),
             ]
-            if self.config.people_overlay:
+            if (
+                self.config.people_overlay
+                or self.yolo_obstacle_pointcloud_publisher is not None
+                or self.arm_obstacle_relationship_publisher is not None
+            ):
                 targets_list.append(("people-3d-worker", self._people_worker))
+            if self.dashboard is not None or self.video_recorder is not None:
+                # Point-cloud serialization can block the scene renderer.  Keep
+                # the live RGB path independent so camera playback remains
+                # smooth while 3D and YOLO updates are being sent.
+                targets_list.append(("gui-video-renderer", self._video_renderer_worker))
             targets_list.append(("gui-renderer", self._renderer_worker))
             targets = tuple(targets_list)
         else:
@@ -237,10 +518,29 @@ class RealtimePipeline:
                 f"Webcam: **connected** — {camera.description}  \n"
                 f"RGB frames are feeding the **{self.config.reconstruction.depth_mode}** depth pipeline.",
                 camera.index,
+                connected=True,
             )
+        elif video.is_remote_stream and self.dashboard is not None:
+            connection_state = "connected" if video.is_connected else "reconnecting"
+            transport = "ROS 2 camera" if video.is_ros2_stream else "Network stream"
+            self.dashboard.update_camera_status(
+                f"{transport}: **{connection_state}**  \n"
+                f"RGB frames are feeding the **{self.config.reconstruction.depth_mode}** depth pipeline.",
+                video.source,
+                connected=video.is_connected,
+            )
+        source_kind = (
+            "webcam"
+            if video.camera_info is not None
+            else "ROS 2 camera"
+            if video.is_ros2_stream
+            else "network stream"
+            if video.is_network_stream
+            else "video"
+        )
         LOGGER.info(
             "Started %s source %s",
-            "webcam" if video.camera_info is not None else "video",
+            source_kind,
             video.camera_info.description if video.camera_info is not None else video.source,
         )
 
@@ -256,6 +556,7 @@ class RealtimePipeline:
             self._cloud_version = 0
             self._people_tracks = []
             self._people_detections = []
+            self._robot_arm = None
             self._people_detection_frame = None
             self._people_version = 0
             self._people_cloud_version = -1
@@ -268,6 +569,31 @@ class RealtimePipeline:
             self.scene.reset()
 
     def handle_command(self, command: str, value: object | None = None) -> None:
+        if command == "camera_fov" and isinstance(value, tuple) and len(value) == 4:
+            horizontal_fov, vertical_fov, image_width, image_height = map(float, value)
+            if not (1.0 < horizontal_fov < 179.0 and 1.0 < vertical_fov < 179.0):
+                LOGGER.warning("Ignoring invalid camera FOV: %s", value)
+                return
+            reconstruction = self.config.reconstruction
+            reconstruction.focal_length_x = image_width / (
+                2.0 * math.tan(math.radians(horizontal_fov) / 2.0)
+            )
+            reconstruction.focal_length_y = image_height / (
+                2.0 * math.tan(math.radians(vertical_fov) / 2.0)
+            )
+            reconstruction.principal_point_x = (image_width - 1.0) / 2.0
+            reconstruction.principal_point_y = (image_height - 1.0) / 2.0
+            LOGGER.info(
+                "Updated camera projection: %.1fx%.1f deg, fx=%.2f, fy=%.2f at %.0fx%.0f",
+                horizontal_fov,
+                vertical_fov,
+                reconstruction.focal_length_x,
+                reconstruction.focal_length_y,
+                image_width,
+                image_height,
+            )
+            self._reset_runtime_state()
+            return
         if command in {"start", "detect_camera"}:
             raw_source = "auto" if command == "detect_camera" or value in (None, "") else str(value).strip()
             source: str | int = int(raw_source) if raw_source.isdigit() else raw_source
@@ -319,6 +645,7 @@ class RealtimePipeline:
 
     def close(self) -> None:
         self._stop_event.set()
+        self._new_frame_event.set()
         with self._source_lock:
             if self._source:
                 self._source.close()
@@ -326,6 +653,14 @@ class RealtimePipeline:
             thread.join(timeout=10.0)
         self._threads.clear()
         self._running = False
+        if self.pointcloud_publisher is not None:
+            self.pointcloud_publisher.close()
+        if self.yolo_obstacle_pointcloud_publisher is not None:
+            self.yolo_obstacle_pointcloud_publisher.close()
+        if self.arm_obstacle_relationship_publisher is not None:
+            self.arm_obstacle_relationship_publisher.close()
+        if self.camera_preview_publisher is not None:
+            self.camera_preview_publisher.close()
         release_gpu_memory()
         if self.session_logger is not None:
             self.session_logger.close()
@@ -336,6 +671,7 @@ class RealtimePipeline:
         next_deadline = time.perf_counter()
         last_source_identity = None
         last_frame_index = -1
+        remote_connected: bool | None = None
         while not self._stop_event.is_set():
             with self._source_lock:
                 source = self._source
@@ -348,12 +684,36 @@ class RealtimePipeline:
                 next_deadline = time.perf_counter()
                 last_source_identity = id(source)
                 last_frame_index = -1
+                remote_connected = None
             wait = next_deadline - time.perf_counter()
             if wait > 0 and self._stop_event.wait(wait):
                 break
             frame = source.read()
             if frame is None:
+                if source.is_remote_stream and not source.is_connected and remote_connected is not False:
+                    remote_connected = False
+                    if self.dashboard is not None:
+                        transport = "ROS 2 camera" if source.is_ros2_stream else "Network stream"
+                        self.dashboard.update_camera_status(
+                            f"{transport}: **reconnecting** — no fresh camera frames.  \n"
+                            "The GUI remains online and will resume automatically.",
+                            source.source,
+                            connected=False,
+                        )
+                # A disconnected remote source may be waiting for DDS data or
+                # an HTTP reconnect. Avoid burning a CPU core in either case.
+                self._stop_event.wait(0.05)
                 continue
+            if source.is_remote_stream and remote_connected is not True:
+                remote_connected = True
+                if self.dashboard is not None:
+                    transport = "ROS 2 camera" if source.is_ros2_stream else "Network stream"
+                    self.dashboard.update_camera_status(
+                        f"{transport}: **connected** — {frame.original_width}x{frame.original_height}.  \n"
+                        f"RGB frames are feeding the **{self.config.reconstruction.depth_mode}** depth pipeline.",
+                        source.source,
+                        connected=True,
+                    )
             if frame.frame_index <= last_frame_index:
                 self._reset_runtime_state()
             last_frame_index = frame.frame_index
@@ -363,6 +723,9 @@ class RealtimePipeline:
             self.performance.tick("input")
             with self._state_lock:
                 self._latest_capture = frame
+            if self.camera_preview_publisher is not None:
+                self.camera_preview_publisher.publish(frame)
+            self._new_frame_event.set()
             self._captured_frames += 1
             self._final_frame_index = frame.frame_index
             if self._max_frames is not None and self._captured_frames >= self._max_frames:
@@ -376,6 +739,7 @@ class RealtimePipeline:
         if self.segmentation is None:
             return
         tracker = StableTracker2D(self.config.tracking)
+        robot_self_filter = RobotSelfFilter(self.config.segmentation)
         camera_motion = CameraMotionEstimator()
         try:
             self.segmentation.load()
@@ -394,6 +758,7 @@ class RealtimePipeline:
                 continue
             if reset_counter != self._reset_counter:
                 tracker.reset()
+                robot_self_filter.reset()
                 camera_motion.reset()
                 reset_counter = self._reset_counter
                 last_segmentation = 0.0
@@ -404,6 +769,7 @@ class RealtimePipeline:
                 try:
                     with self._gpu_lock:
                         inference = self.segmentation.infer(frame)
+                    inference = robot_self_filter.filter_people(inference, frame)
                     detections = tracker.update(inference, frame.source_timestamp)
                     self.performance.tick("segmentation")
                     self._segmentation_ms = (time.perf_counter() - start) * 1000.0
@@ -541,6 +907,13 @@ class RealtimePipeline:
                 cloud.points = cloud.points[: self.config.reconstruction.max_points]
                 cloud.colors = cloud.colors[: len(cloud.points)]
                 cloud.confidence = cloud.confidence[: len(cloud.points)]
+                if self.pointcloud_publisher is not None:
+                    try:
+                        self.pointcloud_publisher.publish(cloud)
+                    except Exception as publish_exc:
+                        if "pointcloud_topic" not in self._errors:
+                            LOGGER.exception("Point-cloud topic publication failed")
+                            self._errors["pointcloud_topic"] = str(publish_exc)
                 self.performance.tick("reconstruction")
                 self._reconstruction_ms = (time.perf_counter() - start) * 1000.0
                 with self._state_lock:
@@ -556,14 +929,23 @@ class RealtimePipeline:
     def _people_worker(self) -> None:
         if self.segmentation is None:
             return
+        maximum_depth = (
+            self.config.reconstruction.max_metric_depth_m
+            or self.config.reconstruction.max_relative_depth
+        )
         extractor = ObstacleExtractor3D(
             self.config.reconstruction.confidence_threshold,
-            self.config.reconstruction.max_relative_depth,
+            maximum_depth,
             self.config.reconstruction.voxel_size,
             minimum_points=20,
         )
         tracker_2d = StableTracker2D(self.config.tracking)
         tracker_3d = Tracker3D(self.config.tracking)
+        robot_self_filter = RobotSelfFilter(self.config.segmentation)
+        observation_cache: dict[int, ObstacleObservation3D] = {}
+        native_obstacle_tracker = callable(
+            getattr(self.segmentation, "track_obstacles", None)
+        )
         try:
             self.segmentation.load()
             with self._gpu_lock:
@@ -577,6 +959,7 @@ class RealtimePipeline:
 
         handled_cloud_version = -1
         reset_counter = self._reset_counter
+        last_yolo_diagnostics_log = 0.0
         while not self._stop_event.is_set():
             with self._state_lock:
                 cloud = self._cloud
@@ -588,54 +971,228 @@ class RealtimePipeline:
             if reset_counter != self._reset_counter:
                 tracker_2d.reset()
                 tracker_3d.reset()
+                robot_self_filter.reset()
+                observation_cache.clear()
+                reset_tracking = getattr(self.segmentation, "reset_tracking", None)
+                if callable(reset_tracking):
+                    reset_tracking()
                 handled_cloud_version = -1
                 reset_counter = self._reset_counter
             try:
                 people_2d: list[Detection2D] = []
+                robot_arm: RobotArmState | None = None
                 if self._models_ready["segmentation"]:
                     start = time.perf_counter()
+
                     def run_inference() -> list[Detection2D]:
-                        infer_people = getattr(self.segmentation, "infer_people", None)
-                        if callable(infer_people):
-                            return infer_people(source_frame)
-                        return [
-                            detection
-                            for detection in self.segmentation.infer(source_frame)
-                            if detection.class_name == "person"
-                        ]
+                        if native_obstacle_tracker:
+                            return self.segmentation.track_obstacles(source_frame)
+                        return self.segmentation.infer(source_frame)
 
                     if runtime_stream is None:
                         with self._gpu_lock:
-                            inference = run_inference()
+                            raw_inference = run_inference()
                     else:
                         import torch
 
                         with torch.cuda.stream(runtime_stream):
-                            inference = run_inference()
-                    people_2d = tracker_2d.update(
+                            raw_inference = run_inference()
+                    inference = robot_self_filter.filter_obstacles(
+                        raw_inference,
+                        source_frame,
+                    )
+                    robot_arm = robot_self_filter.estimate_arm_state(
+                        source_frame,
+                        cloud,
+                    )
+                    # ByteTrack supplies low-confidence recovery masks, while
+                    # this local timestamp-aware association keeps IDs stable
+                    # if the backend resets or changes an external ID.
+                    measured_people = tracker_2d.update(
                         inference,
                         source_frame.source_timestamp,
                     )
+                    held_people = tracker_2d.predict_missing(
+                        source_frame.source_timestamp,
+                        self.config.tracking.visual_hold_updates,
+                    )
+                    # One-frame low-confidence boxes are useful to ByteTrack
+                    # internally but visually look like false-positive flashes.
+                    # Publish/render only tracks that passed the same consecutive
+                    # hit gate used by the 3D obstacle extractor.
+                    visible_measured = [
+                        detection
+                        for detection in measured_people
+                        if detection.track_hits
+                        >= self.config.tracking.confirmation_hits
+                    ]
+                    visible_held = [
+                        detection
+                        for detection in held_people
+                        if detection.track_hits
+                        >= self.config.tracking.confirmation_hits
+                    ]
+                    people_2d = visible_measured + visible_held
                     self.performance.tick("segmentation")
                     self._segmentation_ms = (time.perf_counter() - start) * 1000.0
                     confirmed_people = [
                         detection
-                        for detection in people_2d
-                        if detection.track_hits >= 2 and detection.confidence >= self.config.segmentation.confidence
+                        for detection in measured_people
+                        if detection.track_hits
+                        >= self.config.tracking.confirmation_hits
+                        and not detection.is_prediction
+                        and detection.confidence >= self.config.segmentation.tracking_confidence
                     ]
                     observations, _ = extractor.extract(confirmed_people, cloud)
-                    tracks = tracker_3d.update(observations, cloud.timestamp)
+                    tracks = tracker_3d.update(
+                        observations,
+                        cloud.timestamp,
+                    )
+                    relationship_tracks = [
+                        track
+                        for track in tracks
+                        if track.hit_count >= 1
+                        and track.missing_count
+                        <= self.config.tracking.obstacle_cloud_hold_updates
+                    ]
+                    published_obstacle_points = sum(
+                        observation.point_count for observation in observations
+                    )
+                    if self.yolo_obstacle_pointcloud_publisher is not None:
+                        try:
+                            publish_observations = _observations_with_short_hold(
+                                observations,
+                                tracks,
+                                observation_cache,
+                                self.config.tracking.obstacle_cloud_hold_updates,
+                                cloud.timestamp,
+                                voxel_size=self.config.reconstruction.voxel_size,
+                                max_center_step_m=(
+                                    self.config.tracking.obstacle_center_max_step_m
+                                ),
+                            )
+                            obstacle_cloud = _observation_pointcloud(
+                                publish_observations,
+                                cloud,
+                                self.config.reconstruction.max_points,
+                            )
+                            published_obstacle_points = len(obstacle_cloud.points)
+                            self.yolo_obstacle_pointcloud_publisher.publish(obstacle_cloud)
+                        except Exception as publish_exc:
+                            if "yolo_obstacle_pointcloud_topic" not in self._errors:
+                                LOGGER.exception("YOLO obstacle point-cloud publication failed")
+                                self._errors["yolo_obstacle_pointcloud_topic"] = str(publish_exc)
+                    if self.arm_obstacle_relationship_publisher is not None:
+                        try:
+                            self.arm_obstacle_relationship_publisher.publish(
+                                robot_arm,
+                                relationship_tracks,
+                                source_timestamp=cloud.timestamp,
+                            )
+                        except Exception as publish_exc:
+                            if "arm_obstacle_relationship_topic" not in self._errors:
+                                LOGGER.exception(
+                                    "Arm-obstacle relationship publication failed"
+                                )
+                                self._errors["arm_obstacle_relationship_topic"] = str(
+                                    publish_exc
+                                )
+                    diagnostic_now = time.perf_counter()
+                    if diagnostic_now - last_yolo_diagnostics_log >= 2.0:
+                        accepted_objects = {id(detection) for detection in inference}
+                        LOGGER.info(
+                            "YOLO3D diagnostics frame=%d raw_2d=%d accepted_2d=%d "
+                            "measured=%d confirmed=%d depth_shape=%dx%d "
+                            "observations_3d=%d live_points=%d published_points=%d",
+                            cloud.frame_index,
+                            len(raw_inference),
+                            len(inference),
+                            len(measured_people),
+                            len(confirmed_people),
+                            cloud.pointmap.shape[1],
+                            cloud.pointmap.shape[0],
+                            len(observations),
+                            sum(observation.point_count for observation in observations),
+                            published_obstacle_points,
+                        )
+                        if robot_arm is not None:
+                            LOGGER.info(
+                                "Robot arm center xyz=(%.3f, %.3f, %.3f)m "
+                                "uv=(%.1f, %.1f) mask=%d depth_points=%d "
+                                "confidence=%.2f held=%d",
+                                *robot_arm.center_xyz,
+                                *robot_arm.center_xy,
+                                robot_arm.mask_pixels,
+                                robot_arm.point_count,
+                                robot_arm.confidence,
+                                robot_arm.held_frames,
+                            )
+                        for detection in raw_inference[:8]:
+                            LOGGER.info(
+                                "YOLO2D class=%s confidence=%.3f bbox=(%.1f,%.1f,%.1f,%.1f) "
+                                "mask_pixels=%d self_filter=%s track=%s hits=%d",
+                                detection.class_name,
+                                detection.confidence,
+                                *detection.bbox_xyxy,
+                                (
+                                    int(np.count_nonzero(detection.mask))
+                                    if detection.mask is not None
+                                    else 0
+                                ),
+                                "accepted" if id(detection) in accepted_objects else "rejected",
+                                detection.track_id,
+                                detection.track_hits,
+                            )
+                        for diagnostic in extractor.last_diagnostics[:8]:
+                            depth_range = (
+                                "none"
+                                if diagnostic.depth_median_m is None
+                                else (
+                                    f"{diagnostic.depth_min_m:.3f}/"
+                                    f"{diagnostic.depth_median_m:.3f}/"
+                                    f"{diagnostic.depth_max_m:.3f}m"
+                                )
+                            )
+                            LOGGER.info(
+                                "YOLO3D detection class=%s confidence=%.3f track=%s "
+                                "bbox=%s mask=%d sampled=%d valid_depth=%d "
+                                "depth_min/median/max=%s filtered=%d output=%d reason=%s",
+                                diagnostic.class_name,
+                                diagnostic.confidence,
+                                diagnostic.track_id,
+                                tuple(round(value, 1) for value in diagnostic.bbox_xyxy),
+                                diagnostic.mask_pixels,
+                                diagnostic.sampled_mask_pixels,
+                                diagnostic.valid_depth_pixels,
+                                depth_range,
+                                diagnostic.filtered_points,
+                                diagnostic.output_points,
+                                diagnostic.reason,
+                            )
+                        if confirmed_people and not observations:
+                            LOGGER.warning(
+                                "YOLO detections were confirmed but produced no valid 3D "
+                                "obstacle points; inspect the YOLO3D detection diagnostics above"
+                            )
+                        last_yolo_diagnostics_log = diagnostic_now
                 else:
                     tracks = []
+                    if self.arm_obstacle_relationship_publisher is not None:
+                        self.arm_obstacle_relationship_publisher.publish(
+                            None,
+                            [],
+                            source_timestamp=cloud.timestamp,
+                        )
                 handled_cloud_version = cloud_version
                 with self._state_lock:
                     self._people_tracks = [
                         track
                         for track in tracks
-                        if track.class_name == "person"
-                        and track.missing_count <= self.config.tracking.visual_hold_updates
+                        if track.missing_count
+                        <= self.config.tracking.visual_hold_updates
                     ]
                     self._people_detections = people_2d
+                    self._robot_arm = robot_arm
                     self._people_detection_frame = source_frame
                     self._people_frame_index = cloud.frame_index
                     self._people_cloud_version = cloud_version
@@ -647,6 +1204,7 @@ class RealtimePipeline:
                 with self._state_lock:
                     self._people_tracks = []
                     self._people_detections = []
+                    self._robot_arm = None
                     self._people_detection_frame = source_frame
                     self._people_frame_index = cloud.frame_index
                     self._people_cloud_version = cloud_version
@@ -654,9 +1212,13 @@ class RealtimePipeline:
         self.segmentation.close()
 
     def _safety_worker(self) -> None:
+        maximum_depth = (
+            self.config.reconstruction.max_metric_depth_m
+            or self.config.reconstruction.max_relative_depth
+        )
         extractor = ObstacleExtractor3D(
             self.config.reconstruction.confidence_threshold,
-            self.config.reconstruction.max_relative_depth,
+            maximum_depth,
             self.config.reconstruction.voxel_size,
         )
         tracker = Tracker3D(self.config.tracking)
@@ -704,7 +1266,11 @@ class RealtimePipeline:
             else:
                 traversable = self._traversable
             metric_valid = self.config.scale_mode == "rgbd" or (
-                self.config.scale_mode == "calibrated" and self.config.manual_scale is not None
+                self.config.scale_mode == "calibrated"
+                and (
+                    self.config.manual_scale is not None
+                    or (cloud is not None and cloud.metric_scale is not None)
+                )
             )
             snapshot = decision.update(
                 perception.frame.source_timestamp,
@@ -738,6 +1304,34 @@ class RealtimePipeline:
                 self._traversable = traversable
                 self._planner_result = plan
 
+    def _video_renderer_worker(self) -> None:
+        """Publish reconstruction-mode RGB frames independently of the 3D scene."""
+
+        last_frame_index = -1
+        next_update = time.perf_counter()
+        interval = 1.0 / max(self.config.gui.video_fps, 0.1)
+        while not self._stop_event.is_set():
+            wait = next_update - time.perf_counter()
+            if wait > 0 and self._stop_event.wait(wait):
+                break
+            # Clear before reading so a frame arriving after the snapshot will
+            # wake us immediately. This avoids the old fixed 20 ms polling
+            # penalty when capture and GUI deadlines narrowly missed.
+            self._new_frame_event.clear()
+            with self._state_lock:
+                frame = self._latest_capture
+            if frame is None or frame.frame_index == last_frame_index:
+                self._new_frame_event.wait(timeout=min(interval, 0.05))
+                continue
+            image = frame.bgr.copy()
+            if self.dashboard is not None:
+                self.dashboard.update_video(image)
+            if self.video_recorder is not None:
+                self.video_recorder.write(image, frame.original_fps)
+            self.performance.tick("display")
+            last_frame_index = frame.frame_index
+            next_update = max(next_update + interval, time.perf_counter())
+
     def _renderer_worker(self) -> None:
         last_displayed_frame_index = -1
         last_people_dashboard_version = -1
@@ -754,6 +1348,7 @@ class RealtimePipeline:
                 cloud_version = self._cloud_version
                 people = list(self._people_tracks)
                 people_detections = list(self._people_detections)
+                robot_arm = self._robot_arm
                 people_detection_frame = self._people_detection_frame
                 people_version = self._people_version
                 people_cloud_version = self._people_cloud_version
@@ -775,7 +1370,6 @@ class RealtimePipeline:
                 self.scene is not None
                 and cloud is not None
                 and cloud_version != last_scene_cloud_version
-                and (self.config.mode != "reconstruction" or aligned_people_ready)
             )
             scene_people_due = (
                 self.scene is not None
@@ -795,7 +1389,12 @@ class RealtimePipeline:
                 and people_detection_frame is not None
                 and people_version != last_people_dashboard_version
             )
-            video_due = now - last_video_update >= 1.0 / 24.0
+            # Reconstruction RGB has its own lightweight renderer; this worker
+            # may spend time serializing the point cloud without slowing video.
+            video_due = (
+                self.config.mode != "reconstruction"
+                and now - last_video_update >= 1.0 / max(self.config.gui.video_fps, 0.1)
+            )
             status_due = now - last_status_update >= 0.5
             if display_frame is None:
                 self._stop_event.wait(0.01)
@@ -833,6 +1432,7 @@ class RealtimePipeline:
                 annotated_bgr=annotated,
                 detections=display_detections,
                 pointcloud=cloud,
+                robot_arm=robot_arm,
                 people=people,
                 safety=safety,
                 performance=performance,
@@ -857,6 +1457,11 @@ class RealtimePipeline:
                             len(people),
                             self._models_ready["segmentation"],
                             sum(track.missing_count > 0 for track in people),
+                            metric_scale=cloud.metric_scale if cloud is not None else None,
+                            reference_depth_m=cloud.reference_depth_m if cloud is not None else None,
+                            observed_reference_depth=(
+                                cloud.reference_observed_depth if cloud is not None else None
+                            ),
                         )
                     else:
                         self.dashboard.update_status(
@@ -868,18 +1473,43 @@ class RealtimePipeline:
                             safety.recommended_action.value if safety else "WAIT",
                         )
                 if people_dashboard_due:
-                    self.dashboard.update_people_detections(people_detection_frame, people_detections)
+                    self.dashboard.update_people_detections(
+                        people_detection_frame,
+                        people_detections,
+                        robot_arm=robot_arm,
+                        tracks=people,
+                    )
                     last_people_dashboard_version = people_version
             if self.scene is not None:
                 if scene_cloud_due and cloud is not None:
                     if self.config.mode == "reconstruction" and self.config.people_overlay:
-                        self.scene.update_aligned_frame(cloud, people, yolo_count=len(people_detections))
-                        last_scene_people_version = people_version
+                        # Never let slower YOLO/3D-person alignment freeze the
+                        # primary point cloud. When YOLO for this depth frame is
+                        # not ready yet, update only the persistent point-cloud
+                        # buffers and keep the last confirmed obstacle handles.
+                        # Clearing them here and rebuilding them milliseconds
+                        # later was the main GUI center/box flicker.
+                        if aligned_people_ready:
+                            self.scene.update_aligned_frame(
+                                cloud,
+                                people,
+                                yolo_count=len(people_detections),
+                                robot_arm=robot_arm,
+                            )
+                        else:
+                            self.scene.update_pointcloud(cloud)
+                        if aligned_people_ready:
+                            last_scene_people_version = people_version
                     else:
                         self.scene.update_pointcloud(cloud)
                     last_scene_cloud_version = cloud_version
                 elif scene_people_due:
-                    self.scene.update_people(people_frame_index, people, yolo_count=len(people_detections))
+                    self.scene.update_people(
+                        people_frame_index,
+                        people,
+                        yolo_count=len(people_detections),
+                        robot_arm=robot_arm,
+                    )
                     last_scene_people_version = people_version
                 if scene_safety_due:
                     self.scene.update_obstacles(safety.tracks, safety.danger_zones)

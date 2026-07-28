@@ -1,7 +1,83 @@
 from __future__ import annotations
 
+from collections import deque
+from collections.abc import Sequence
+
 import cv2
 import numpy as np
+
+
+class ReferenceDepthCalibrator:
+    """Recover a stable metric scale from a fixed object at a known distance.
+
+    One measured distance can constrain only a global multiplicative scale.
+    The reference is sampled before 3D projection so the same correction is
+    applied to forward depth and both lateral axes.
+    """
+
+    def __init__(
+        self,
+        target_depth_m: float,
+        roi: Sequence[float],
+        percentile: float = 20.0,
+        warmup_frames: int = 8,
+        ema_alpha: float = 0.08,
+    ) -> None:
+        self.target_depth_m = float(target_depth_m)
+        self.roi = tuple(float(value) for value in roi)
+        self.percentile = float(percentile)
+        self.warmup_frames = int(warmup_frames)
+        self.ema_alpha = float(ema_alpha)
+        self._candidates: deque[float] = deque(maxlen=self.warmup_frames)
+        self.scale: float | None = None
+        self.observed_depth: float | None = None
+        self.ready = False
+
+    def update(self, depth: np.ndarray) -> float:
+        values = np.asarray(depth, dtype=np.float32)
+        if values.ndim != 2:
+            raise ValueError("depth must have shape HxW")
+        height, width = values.shape
+        x_min, y_min, x_max, y_max = self.roi
+        x0 = max(0, min(width - 1, int(np.floor(x_min * width))))
+        x1 = max(x0 + 1, min(width, int(np.ceil(x_max * width))))
+        y0 = max(0, min(height - 1, int(np.floor(y_min * height))))
+        y1 = max(y0 + 1, min(height, int(np.ceil(y_max * height))))
+        crop = values[y0:y1, x0:x1]
+        valid = crop[np.isfinite(crop) & (crop > 0.05)]
+        if valid.size < 32:
+            return self.scale if self.scale is not None else 1.0
+
+        observed = float(np.percentile(valid, self.percentile))
+        candidate = self.target_depth_m / observed
+        if not np.isfinite(candidate) or candidate <= 0:
+            return self.scale if self.scale is not None else 1.0
+
+        # Once initialized, a hand or person passing over the reference ROI
+        # must not abruptly rescale the entire world.
+        if self.ready and self.scale is not None:
+            ratio = candidate / self.scale
+            if ratio < 0.65 or ratio > 1.35:
+                return self.scale
+
+        self.observed_depth = observed
+        self._candidates.append(candidate)
+        robust_candidate = float(np.median(self._candidates))
+        if self.scale is None or not self.ready:
+            self.scale = robust_candidate
+        else:
+            # Bound each accepted update as a second guard against artificial
+            # scene motion, then follow slow model-scale drift with an EMA.
+            bounded = float(np.clip(robust_candidate, self.scale * 0.9, self.scale * 1.1))
+            self.scale = (1.0 - self.ema_alpha) * self.scale + self.ema_alpha * bounded
+        self.ready = len(self._candidates) >= self.warmup_frames
+        return self.scale
+
+    def reset(self) -> None:
+        self._candidates.clear()
+        self.scale = None
+        self.observed_depth = None
+        self.ready = False
 
 
 def relative_inverse_depth(prediction: np.ndarray, median_distance: float = 3.0) -> np.ndarray:

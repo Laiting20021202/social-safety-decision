@@ -16,6 +16,13 @@ from realtime_safety.types import FramePacket
 
 LOGGER = logging.getLogger(__name__)
 AUTO_CAMERA_ALIASES = {"auto", "camera", "webcam", "usb", "usb-camera", "usb_camera"}
+NETWORK_STREAM_PREFIXES = ("http://", "https://", "rtsp://", "rtsps://")
+ROS2_STREAM_PREFIX = "ros2://"
+NETWORK_RECONNECT_INITIAL_DELAY_SECONDS = 1.0
+# Keep retries sparse enough not to accumulate abandoned web_video_server
+# handlers, but short enough that a recovered camera never looks dead for a
+# full minute. Open/read calls remain bounded separately below.
+NETWORK_RECONNECT_MAX_DELAY_SECONDS = 10.0
 
 
 class CameraDetectionError(RuntimeError):
@@ -69,6 +76,39 @@ def _open_camera_capture(index: int) -> cv2.VideoCapture:
     if sys.platform.startswith("linux") and hasattr(cv2, "CAP_V4L2"):
         return cv2.VideoCapture(index, cv2.CAP_V4L2)
     return cv2.VideoCapture(index)
+
+
+def _open_network_capture(source: str) -> cv2.VideoCapture:
+    """Open a live HTTP/RTSP stream with bounded FFmpeg timeouts when supported.
+
+    Do not retry a failed FFmpeg open with OpenCV's default constructor.  That
+    fallback drops the timeout parameters and can block the capture worker for
+    roughly 30 seconds when a Wi-Fi camera disappears.
+    """
+
+    if hasattr(cv2, "CAP_FFMPEG"):
+        params: list[int] = []
+        if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
+            params.extend((cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5_000))
+        if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
+            # The Koch Wi-Fi path has occasionally paused for several seconds.
+            # A short timeout churns web_video_server connections and can
+            # eventually exhaust its stream handlers during an overnight run.
+            params.extend((cv2.CAP_PROP_READ_TIMEOUT_MSEC, 10_000))
+        try:
+            return cv2.VideoCapture(source, cv2.CAP_FFMPEG, params)
+        except (TypeError, cv2.error):
+            # Older OpenCV builds do not accept constructor parameters.  Keep
+            # compatibility for those builds; current deployments take the
+            # bounded path above.
+            pass
+    return cv2.VideoCapture(source)
+
+
+def _open_ros2_capture(topic: str):
+    from realtime_safety.ros2_bridge.image_subscriber import Ros2ImageCapture
+
+    return Ros2ImageCapture(topic)
 
 
 def _camera_name(index: int) -> str:
@@ -154,9 +194,12 @@ class VideoSource:
         self.loop = loop
         self.playback_speed = max(float(playback_speed), 0.05)
         self._capture: cv2.VideoCapture | None = None
+        self._ros_capture = None
         self._lock = threading.RLock()
         self._state = PlaybackState.STOPPED
         self._frame_index = -1
+        self._last_reconnect_attempt = 0.0
+        self._reconnect_delay = NETWORK_RECONNECT_INITIAL_DELAY_SECONDS
 
     @staticmethod
     def _normalize_source(source: str | int) -> str | int:
@@ -165,8 +208,15 @@ class VideoSource:
         value = str(source).strip()
         if value.startswith("/dev/video") and value.removeprefix("/dev/video").isdigit():
             return int(value.removeprefix("/dev/video"))
-        if value.lower().startswith(("rtsp://", "rtsps://")):
+        if value.lower().startswith(NETWORK_STREAM_PREFIXES):
             return value
+        if value.lower().startswith(ROS2_STREAM_PREFIX):
+            topic = value[len(ROS2_STREAM_PREFIX) :]
+            if not topic.startswith("/") or any(char.isspace() for char in topic):
+                raise ValueError(
+                    f"ROS 2 image topic must be an absolute name without whitespace: {topic or value}"
+                )
+            return ROS2_STREAM_PREFIX + topic
         suffix = Path(value).suffix.lower()
         if suffix not in VideoSource.SUPPORTED_EXTENSIONS:
             raise ValueError(f"Unsupported video extension: {suffix or value}")
@@ -181,20 +231,71 @@ class VideoSource:
 
     @property
     def is_live(self) -> bool:
-        return isinstance(self.source, int) or str(self.source).lower().startswith(("rtsp://", "rtsps://"))
+        return isinstance(self.source, int) or self.is_remote_stream
+
+    @property
+    def is_network_stream(self) -> bool:
+        return isinstance(self.source, str) and self.source.lower().startswith(NETWORK_STREAM_PREFIXES)
+
+    @property
+    def is_ros2_stream(self) -> bool:
+        return isinstance(self.source, str) and self.source.lower().startswith(ROS2_STREAM_PREFIX)
+
+    @property
+    def is_remote_stream(self) -> bool:
+        return self.is_network_stream or self.is_ros2_stream
+
+    @property
+    def ros2_topic(self) -> str:
+        if not self.is_ros2_stream:
+            raise ValueError(f"Not a ROS 2 image source: {self.source}")
+        return str(self.source)[len(ROS2_STREAM_PREFIX) :]
+
+    @property
+    def is_connected(self) -> bool:
+        with self._lock:
+            if self.is_ros2_stream:
+                return self._ros_capture is not None and self._ros_capture.is_connected
+            return self._capture is not None and self._capture.isOpened()
+
+    def _new_capture(self) -> cv2.VideoCapture:
+        if isinstance(self.source, int):
+            return _open_camera_capture(self.source)
+        if self.is_network_stream:
+            return _open_network_capture(self.source)
+        return cv2.VideoCapture(self.source)
 
     def open(self) -> None:
         with self._lock:
             self.close()
-            capture = _open_camera_capture(self.source) if isinstance(self.source, int) else cv2.VideoCapture(self.source)
+            if self.is_ros2_stream:
+                self._ros_capture = _open_ros2_capture(self.ros2_topic)
+                self._ros_capture.start()
+                self._frame_index = -1
+                self._state = PlaybackState.RUNNING
+                return
+            capture = self._new_capture()
             if not capture.isOpened():
                 capture.release()
+                if self.is_network_stream:
+                    # A live network source may be temporarily unavailable at
+                    # startup.  Keep the pipeline alive so the capture worker
+                    # can reconnect without requiring a GUI restart.
+                    self._capture = None
+                    self._frame_index = -1
+                    self._last_reconnect_attempt = time.perf_counter()
+                    self._reconnect_delay = NETWORK_RECONNECT_INITIAL_DELAY_SECONDS
+                    self._state = PlaybackState.RUNNING
+                    LOGGER.warning("Network video unavailable; waiting to reconnect: %s", self.source)
+                    return
                 raise RuntimeError(f"Cannot open video source: {self.source}")
             capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             if isinstance(self.source, int):
                 self.camera_info = _camera_device(self.source, capture)
             self._capture = capture
             self._frame_index = -1
+            self._last_reconnect_attempt = 0.0
+            self._reconnect_delay = NETWORK_RECONNECT_INITIAL_DELAY_SECONDS
             self._state = PlaybackState.RUNNING
 
     def pause(self) -> None:
@@ -209,6 +310,9 @@ class VideoSource:
 
     def stop(self) -> None:
         with self._lock:
+            if self._ros_capture is not None:
+                self._ros_capture.close()
+                self._ros_capture = None
             if self._capture is not None:
                 self._capture.release()
                 self._capture = None
@@ -216,6 +320,9 @@ class VideoSource:
 
     def restart(self) -> None:
         with self._lock:
+            if self.is_remote_stream:
+                self.open()
+                return
             if self._capture is None:
                 self.open()
                 return
@@ -237,14 +344,53 @@ class VideoSource:
 
     def read(self) -> FramePacket | None:
         with self._lock:
-            if self._state != PlaybackState.RUNNING or self._capture is None:
+            if self._state != PlaybackState.RUNNING:
                 return None
+            if self.is_ros2_stream:
+                if self._ros_capture is None:
+                    return None
+                sample = self._ros_capture.read_latest()
+                if sample is None:
+                    return None
+                bgr, ros_timestamp, fps = sample
+                self._frame_index += 1
+                capture_ts = time.perf_counter()
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                height, width = bgr.shape[:2]
+                return FramePacket(
+                    frame_index=self._frame_index,
+                    source_timestamp=ros_timestamp if ros_timestamp > 0.0 else capture_ts,
+                    capture_timestamp=capture_ts,
+                    bgr=bgr,
+                    rgb=rgb,
+                    original_fps=fps,
+                    original_width=width,
+                    original_height=height,
+                )
+            if self._capture is None:
+                if not self._reconnect_network():
+                    return None
             ok, bgr = self._capture.read()
             if not ok:
                 if self.loop and not self.is_live:
                     self.restart()
                     ok, bgr = self._capture.read()
+                elif self.is_network_stream:
+                    # Return control immediately after a timed-out read.  The
+                    # next capture iteration performs a bounded reconnect;
+                    # doing both operations here doubles the visible stall.
+                    self._capture.release()
+                    self._capture = None
+                    self._schedule_reconnect_backoff()
+                    LOGGER.warning(
+                        "Lost network video stream; retrying in %.0f seconds: %s",
+                        self._reconnect_delay,
+                        self.source,
+                    )
+                    return None
                 if not ok:
+                    if self.is_network_stream:
+                        return None
                     self._state = PlaybackState.ENDED
                     return None
             self._frame_index += 1
@@ -260,6 +406,12 @@ class VideoSource:
                 source_ts = self._frame_index / fps if fps > 0 else float(self._frame_index)
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             height, width = bgr.shape[:2]
+            if self.is_network_stream:
+                # A decoded frame proves that the new stream is genuinely
+                # healthy. Merely opening a TCP connection is insufficient:
+                # a hung web_video_server can accept without sending bytes.
+                self._reconnect_delay = NETWORK_RECONNECT_INITIAL_DELAY_SECONDS
+                self._last_reconnect_attempt = 0.0
             return FramePacket(
                 frame_index=self._frame_index,
                 source_timestamp=source_ts,
@@ -271,8 +423,43 @@ class VideoSource:
                 original_height=height,
             )
 
+    def _reconnect_network(self) -> bool:
+        if not self.is_network_stream:
+            return False
+        now = time.perf_counter()
+        if now - self._last_reconnect_attempt < self._reconnect_delay:
+            return False
+        self._last_reconnect_attempt = now
+        if self._capture is not None:
+            self._capture.release()
+        capture = self._new_capture()
+        if not capture.isOpened():
+            capture.release()
+            self._capture = None
+            self._schedule_reconnect_backoff(now)
+            LOGGER.warning(
+                "Network video unavailable; next retry in %.0f seconds: %s",
+                self._reconnect_delay,
+                self.source,
+            )
+            return False
+        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self._capture = capture
+        LOGGER.info("Reconnected network video stream: %s", self.source)
+        return True
+
+    def _schedule_reconnect_backoff(self, now: float | None = None) -> None:
+        self._last_reconnect_attempt = time.perf_counter() if now is None else now
+        self._reconnect_delay = min(
+            max(self._reconnect_delay * 2.0, NETWORK_RECONNECT_INITIAL_DELAY_SECONDS),
+            NETWORK_RECONNECT_MAX_DELAY_SECONDS,
+        )
+
     def close(self) -> None:
         with self._lock:
+            if self._ros_capture is not None:
+                self._ros_capture.close()
+                self._ros_capture = None
             if self._capture is not None:
                 self._capture.release()
                 self._capture = None

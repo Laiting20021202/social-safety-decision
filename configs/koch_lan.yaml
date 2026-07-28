@@ -1,0 +1,108 @@
+name: koch_lan
+mode: reconstruction
+people_overlay: true
+device: cuda
+scale_mode: calibrated
+video:
+  queue_size: 2
+  loop: false
+  playback_speed: 1.0
+segmentation:
+  # YOLO26m's multi-scale mask prototype improves the points selected at person
+  # boundaries while remaining well below the depth-frame budget on this GPU.
+  model: yolo26m-seg.pt
+  # 384 preserves small hands/partial people better than 320 on the RTX 4060
+  # while remaining within the 12 Hz perception budget.
+  input_size: 384
+  # New tracks need a strong detection; ByteTrack may use lower-confidence
+  # detections only to continue an already established person ID.
+  confidence: 0.50
+  tracking_confidence: 0.10
+  tracker_config: configs/koch_bytetrack.yaml
+  iou: 0.5
+  frequency_hz: 12.0
+  fp16: true
+  # The Koch arm enters from the top-centre of this fixed camera. Follow only
+  # the anchored green robot links and remove them from person masks; a real
+  # hand beside/on the arm remains because the whole centre ROI is not hidden.
+  robot_self_filter: true
+  robot_anchor_roi: [0.38, 0.0, 0.64, 0.28]
+  robot_green_hsv_lower: [40, 55, 25]
+  robot_green_hsv_upper: [95, 255, 255]
+  robot_mask_dilation_px: 17
+  robot_tip_extension_px: 48
+  robot_mask_hold_frames: 6
+  robot_mask_temporal_frames: 4
+  robot_component_link_px: 20
+  robot_reject_overlap: 0.55
+  robot_reject_min_overlap: 0.20
+  robot_min_residual_pixels: 80
+  robot_center_ema_alpha: 0.22
+  robot_center_hold_frames: 12
+reconstruction:
+  depth_mode: video_depth
+  model: depth-anything/Depth-Anything-V2-Small-hf
+  st4rtrack_path: third_party/St4RTrack
+  video_depth_path: third_party/Video-Depth-Anything
+  # Restore the original pre-metric-calibration pinhole projection. The camera
+  # publishes no calibrated CameraInfo (K is all zeros), so this remains a
+  # fallback until a checkerboard calibration is available.
+  focal_length_x: 272.0
+  focal_length_y: 272.0
+  principal_point_x: 159.5
+  principal_point_y: 119.5
+  # The centered gripper is rigidly mounted 0.40 m from the webcam. The ROI is
+  # normalized [x_min, y_min, x_max, y_max] in the incoming camera image.
+  metric_reference_depth_m: 0.40
+  metric_reference_roi: [0.46, 0.34, 0.61, 0.70]
+  metric_reference_percentile: 20.0
+  metric_reference_warmup_frames: 8
+  # The camera/reference mount is rigid. Freeze the robust scale after warmup
+  # so foreground motion cannot make the whole reconstructed room "breathe".
+  metric_reference_ema_alpha: 0.0
+  input_size: 252
+  frequency_hz: 12.0
+  fast_depth_frequency_hz: 12.0
+  max_points: 8000
+  voxel_size: 0.01
+  confidence_threshold: 0.0
+  display_confidence_threshold: 1.00001
+  filter_sky: true
+  # Native-model outlier gate, followed by a calibrated operational range.
+  max_relative_depth: 30.0
+  max_metric_depth_m: 4.0
+  anchor_interval: 0
+  fp16: true
+tracking:
+  max_missing: 24
+  visual_hold_updates: 8
+  obstacle_cloud_hold_updates: 12
+  confirmation_hits: 3
+  bbox_smoothing_alpha: 0.42
+  obstacle_center_max_step_m: 0.15
+  iou_threshold: 0.2
+  association_distance: 1.5
+  dynamic_enter_speed: 0.15
+  dynamic_exit_speed: 0.08
+  minimum_dynamic_hits: 3
+safety:
+  target_hz: 10.0
+  prediction_horizon: 3.0
+  prediction_timestep: 0.2
+  robot_radius: 0.35
+  safety_margin: 0.2
+  uncertainty_gain: 0.25
+  stop_ttc: 1.0
+  warning_ttc: 2.5
+  stop_clearance: 0.4
+  warning_clearance: 0.8
+  release_safe_updates: 5
+gui:
+  host: 0.0.0.0
+  port: 8080
+  presentation_mode: true
+  max_video_width: 320
+  video_fps: 20.0
+  point_size: 0.0035
+  history_frames: 1
+  history_stride: 1

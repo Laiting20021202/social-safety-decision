@@ -38,11 +38,11 @@ def test_predict_to_updates_position_without_measurement() -> None:
     assert future.position_xyz[0] > state.position_xyz[0]
 
 
-def test_established_person_track_jump_reanchors_without_false_velocity() -> None:
+def test_established_person_track_rejects_one_frame_depth_jump() -> None:
     tracker = Tracker3D(TrackingConfig())
     tracker.update([observation(0.00, 0.0)], 0.0)
     tracker.update([observation(0.05, 0.1)], 0.1)
     jumped = tracker.update([observation(2.00, 0.2)], 0.2)[0]
-    assert np.allclose(jumped.position_xyz, observation(2.00, 0.2).position_xyz)
-    assert np.allclose(jumped.velocity_xyz, 0.0)
-    assert jumped.hit_count == 1
+    assert jumped.position_xyz[0] < 0.6
+    assert jumped.position_xyz[0] > 0.05
+    assert jumped.hit_count == 3

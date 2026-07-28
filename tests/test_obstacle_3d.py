@@ -34,9 +34,59 @@ def test_mask_maps_to_only_its_3d_points() -> None:
         source="test",
         dense_confidence=np.ones((height, width), dtype=np.float32),
     )
-    observations, assigned = ObstacleExtractor3D(minimum_points=10, voxel_size=0.0).extract([detection], cloud)
+    extractor = ObstacleExtractor3D(minimum_points=10, voxel_size=0.0)
+    observations, assigned = extractor.extract([detection], cloud)
     assert len(observations) == 1
     assert observations[0].track_id == 4
     assert observations[0].class_name == "person"
     assert assigned.sum() == mask.sum()
     assert 0.1 < observations[0].position_xyz[0] < 0.2
+    diagnostic = extractor.last_diagnostics[0]
+    assert diagnostic.mask_pixels == 100
+    assert diagnostic.valid_depth_pixels == 64
+    assert diagnostic.depth_min_m == 3.0
+    assert diagnostic.depth_median_m == 3.0
+    assert diagnostic.depth_max_m == 3.0
+    assert diagnostic.output_points == observations[0].point_count
+    assert diagnostic.reason == "ok"
+
+
+def test_diagnostics_explain_detection_with_no_valid_depth() -> None:
+    height, width = 20, 30
+    pointmap = np.zeros((height, width, 3), dtype=np.float32)
+    mask = np.zeros((height, width), dtype=bool)
+    mask[5:15, 10:20] = True
+    detection = Detection2D(
+        bbox_xyxy=np.array([10, 5, 20, 15], dtype=np.float32),
+        class_id=0,
+        class_name="person",
+        confidence=0.9,
+        centroid_xy=np.array([15, 10], dtype=np.float32),
+        timestamp=1.0,
+        mask=mask,
+        track_id=4,
+        image_size=(width, height),
+    )
+    cloud = PointCloudFrame(
+        points=np.empty((0, 3), dtype=np.float32),
+        colors=np.empty((0, 3), dtype=np.uint8),
+        confidence=np.empty((0,), dtype=np.float32),
+        pointmap=pointmap,
+        frame_index=1,
+        timestamp=1.0,
+        anchor_frame_index=1,
+        inference_ms=1.0,
+        valid=False,
+        source="test",
+        dense_confidence=np.ones((height, width), dtype=np.float32),
+    )
+    extractor = ObstacleExtractor3D(minimum_points=10, voxel_size=0.0)
+
+    observations, _ = extractor.extract([detection], cloud)
+
+    assert observations == []
+    diagnostic = extractor.last_diagnostics[0]
+    assert diagnostic.valid_depth_pixels == 0
+    assert diagnostic.depth_median_m is None
+    assert diagnostic.output_points == 0
+    assert diagnostic.reason == "insufficient_points_after_depth_filter"

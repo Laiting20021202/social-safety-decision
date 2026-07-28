@@ -27,6 +27,23 @@ class SegmentationBackend(ABC):
     def infer_people(self, frame: FramePacket) -> list[Detection2D]:
         return [detection for detection in self.infer(frame) if detection.class_name == "person"]
 
+    def track_people(self, frame: FramePacket) -> list[Detection2D]:
+        """Track people in consecutive frames.
+
+        Backends without a native tracker retain the previous person-only
+        inference behaviour; the scheduler will assign IDs locally.
+        """
+
+        return self.infer_people(frame)
+
+    def track_obstacles(self, frame: FramePacket) -> list[Detection2D]:
+        """Track every model class accepted as a collision obstacle."""
+
+        return self.infer(frame)
+
+    def reset_tracking(self) -> None:
+        return None
+
     def close(self) -> None:
         return None
 
@@ -108,7 +125,7 @@ class UltralyticsSegmentationBackend(SegmentationBackend):
                 conf=self.config.confidence,
                 iou=self.config.iou,
                 device=self.device,
-                half=self.device.startswith("cuda") and self.config.fp16,
+                quantize=16 if self.device.startswith("cuda") and self.config.fp16 else None,
                 retina_masks=False,
                 verbose=verbose,
                 max_det=100,
@@ -124,6 +141,56 @@ class UltralyticsSegmentationBackend(SegmentationBackend):
         person_ids = [class_id for class_id, name in self.names.items() if name == "person"]
         return self._results_to_detections(self._predict(frame.bgr, classes=person_ids or None), frame)
 
+    def track_people(self, frame: FramePacket) -> list[Detection2D]:
+        """Use ByteTrack's low-confidence recovery while only tracking people."""
+
+        return self._track_classes(frame, {"person"})
+
+    def track_obstacles(self, frame: FramePacket) -> list[Detection2D]:
+        """Track all accepted obstacle classes with one persistent ByteTrack state."""
+
+        return self._track_classes(frame, self.OBSTACLE_CLASSES)
+
+    def _track_classes(
+        self,
+        frame: FramePacket,
+        class_names: set[str],
+    ) -> list[Detection2D]:
+        if self.model is None:
+            raise RuntimeError("Segmentation model has not been loaded")
+        import torch
+
+        class_ids = [
+            class_id
+            for class_id, name in self.names.items()
+            if name in class_names
+        ]
+        autocast = (
+            torch.autocast(device_type="cuda", dtype=torch.float16)
+            if self.device.startswith("cuda") and self.config.fp16
+            else contextlib.nullcontext()
+        )
+        timer = CudaEventTimer(self.device.startswith("cuda"))
+        with torch.inference_mode(), autocast, timer:
+            results = self.model.track(
+                source=frame.bgr,
+                imgsz=self.config.input_size,
+                conf=self.config.tracking_confidence,
+                iou=self.config.iou,
+                device=self.device,
+                quantize=16 if self.device.startswith("cuda") and self.config.fp16 else None,
+                classes=class_ids or None,
+                persist=True,
+                tracker=self.config.tracker_config or "bytetrack.yaml",
+                # Full-resolution masks materially reduce green-arm pixels
+                # leaking into nearby person/obstacle clouds.
+                retina_masks=True,
+                verbose=False,
+                max_det=100,
+            )
+        self.last_gpu_ms = timer.elapsed_ms
+        return self._results_to_detections(results, frame)
+
     def _results_to_detections(self, results, frame: FramePacket) -> list[Detection2D]:
         if not results:
             return []
@@ -133,6 +200,11 @@ class UltralyticsSegmentationBackend(SegmentationBackend):
         boxes = result.boxes.xyxy.detach().float().cpu().numpy()
         classes = result.boxes.cls.detach().int().cpu().numpy()
         confidences = result.boxes.conf.detach().float().cpu().numpy()
+        track_ids = (
+            result.boxes.id.detach().int().cpu().numpy()
+            if result.boxes.id is not None
+            else None
+        )
         masks = None
         if result.masks is not None:
             masks = result.masks.data.detach().float().cpu().numpy()
@@ -159,10 +231,18 @@ class UltralyticsSegmentationBackend(SegmentationBackend):
                     centroid_xy=centroid,
                     timestamp=frame.source_timestamp,
                     mask=mask,
+                    track_id=int(track_ids[index]) if track_ids is not None else None,
                     image_size=(frame.original_width, frame.original_height),
                 )
             )
         return detections
+
+    def reset_tracking(self) -> None:
+        predictor = getattr(self.model, "predictor", None)
+        for tracker in getattr(predictor, "trackers", ()) or ():
+            reset = getattr(tracker, "reset", None)
+            if callable(reset):
+                reset()
 
     def close(self) -> None:
         self.model = None

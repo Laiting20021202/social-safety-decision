@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import cv2
 import numpy as np
 from scipy.sparse.csgraph import connected_components
@@ -7,6 +9,23 @@ from scipy.spatial import cKDTree
 
 from realtime_safety.pipeline.pointcloud import voxel_downsample
 from realtime_safety.types import BBox3D, Detection2D, ObstacleObservation3D, PointCloudFrame
+
+
+@dataclass(slots=True)
+class DetectionDepthDiagnostics:
+    track_id: int | None
+    class_name: str
+    confidence: float
+    bbox_xyxy: tuple[float, float, float, float]
+    mask_pixels: int
+    sampled_mask_pixels: int
+    valid_depth_pixels: int
+    depth_min_m: float | None
+    depth_median_m: float | None
+    depth_max_m: float | None
+    filtered_points: int
+    output_points: int
+    reason: str
 
 
 class ObstacleExtractor3D:
@@ -21,6 +40,7 @@ class ObstacleExtractor3D:
         self.max_depth = max_depth
         self.voxel_size = voxel_size
         self.minimum_points = minimum_points
+        self.last_diagnostics: list[DetectionDepthDiagnostics] = []
 
     def extract(
         self, detections: list[Detection2D], cloud: PointCloudFrame
@@ -33,32 +53,65 @@ class ObstacleExtractor3D:
         )
         assigned = np.zeros((height, width), dtype=bool)
         observations: list[ObstacleObservation3D] = []
+        diagnostics: list[DetectionDepthDiagnostics] = []
+        valid_geometry = (
+            np.isfinite(cloud.pointmap).all(axis=-1)
+            & (dense_confidence >= self.confidence_threshold)
+            & (cloud.pointmap[..., 1] > 0.05)
+            & (cloud.pointmap[..., 1] < self.max_depth)
+        )
         for detection in detections:
-            if detection.track_id is None:
-                continue
             mask = self._mask_for_detection(detection, width, height)
             assignment_mask = mask
+            mask_pixels = int(mask.sum())
             if detection.class_name == "person" and int(mask.sum()) >= 80:
                 # Trim mixed foreground/background boundary pixels before
                 # reading the St4RTrack pointmap.
                 mask = cv2.erode(mask.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1).astype(bool)
-            valid_geometry = (
-                np.isfinite(cloud.pointmap).all(axis=-1)
-                & (dense_confidence >= self.confidence_threshold)
-                & (cloud.pointmap[..., 1] > 0.05)
-                & (cloud.pointmap[..., 1] < self.max_depth)
-            )
-            valid = (
-                mask
-                & valid_geometry
-            )
+            sampled_mask_pixels = int(mask.sum())
+            valid = mask & valid_geometry
             points = cloud.pointmap[valid]
+            forward_depth = points[:, 1] if len(points) else np.empty((0,), dtype=np.float32)
+            depth_min = float(np.min(forward_depth)) if len(forward_depth) else None
+            depth_median = float(np.median(forward_depth)) if len(forward_depth) else None
+            depth_max = float(np.max(forward_depth)) if len(forward_depth) else None
+            if detection.track_id is None:
+                diagnostics.append(
+                    self._diagnostic(
+                        detection,
+                        mask_pixels,
+                        sampled_mask_pixels,
+                        len(points),
+                        depth_min,
+                        depth_median,
+                        depth_max,
+                        filtered_points=0,
+                        output_points=0,
+                        reason="missing_track_id",
+                    )
+                )
+                continue
             points = (
                 self._robust_filter_person(points)
                 if detection.class_name == "person"
                 else self._robust_filter(points)
             )
+            filtered_points = len(points)
             if len(points) < self.minimum_points:
+                diagnostics.append(
+                    self._diagnostic(
+                        detection,
+                        mask_pixels,
+                        sampled_mask_pixels,
+                        int(valid.sum()),
+                        depth_min,
+                        depth_median,
+                        depth_max,
+                        filtered_points,
+                        output_points=0,
+                        reason="insufficient_points_after_depth_filter",
+                    )
+                )
                 continue
             # Keep the full segmentation footprint reserved even though person
             # geometry is estimated from a boundary-trimmed mask.
@@ -72,7 +125,51 @@ class ObstacleExtractor3D:
                 max_points=3000,
             )
             observations.append(self._observation(detection.track_id, detection.class_name, detection.confidence, points, cloud.timestamp))
+            diagnostics.append(
+                self._diagnostic(
+                    detection,
+                    mask_pixels,
+                    sampled_mask_pixels,
+                    int(valid.sum()),
+                    depth_min,
+                    depth_median,
+                    depth_max,
+                    filtered_points,
+                    output_points=len(points),
+                    reason="ok",
+                )
+            )
+        self.last_diagnostics = diagnostics
         return observations, assigned
+
+    @staticmethod
+    def _diagnostic(
+        detection: Detection2D,
+        mask_pixels: int,
+        sampled_mask_pixels: int,
+        valid_depth_pixels: int,
+        depth_min_m: float | None,
+        depth_median_m: float | None,
+        depth_max_m: float | None,
+        filtered_points: int,
+        output_points: int,
+        reason: str,
+    ) -> DetectionDepthDiagnostics:
+        return DetectionDepthDiagnostics(
+            track_id=detection.track_id,
+            class_name=detection.class_name,
+            confidence=float(detection.confidence),
+            bbox_xyxy=tuple(float(value) for value in detection.bbox_xyxy),
+            mask_pixels=int(mask_pixels),
+            sampled_mask_pixels=int(sampled_mask_pixels),
+            valid_depth_pixels=int(valid_depth_pixels),
+            depth_min_m=depth_min_m,
+            depth_median_m=depth_median_m,
+            depth_max_m=depth_max_m,
+            filtered_points=int(filtered_points),
+            output_points=int(output_points),
+            reason=reason,
+        )
 
     def find_unknown(
         self,
