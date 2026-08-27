@@ -1,0 +1,63 @@
+schema_version: 1
+robot:
+  model: openarm_v1.0
+  bimanual: true
+  asset:
+    usd_env: OPENARM_USD_PATH
+    description_root_env: OPENARM_DESCRIPTION_ROOT
+    description_root_candidates:
+      - /home/david/Desktop/laiting/itri/3d_safety_decision/realtime_3d_safety_decision/third_party/openarm_description
+    generated_urdf: generated/openarm_v10_bimanual.urdf
+    source_repository: https://github.com/enactic/openarm_description.git
+    pinned_revision: 1fba2cbc05001f05b4514120b70130b4ac06f409
+  prim_path: /World/OpenArm
+  # The official bimanual URDF mounts each shoulder 0.698 m above this root.
+  # The root is the physical pedestal foot, so z=0 keeps it on the floor while
+  # the shoulders sit just below the 0.80 m tabletop, matching the real rig.
+  base_position: [-0.48, 0.0, 0.0]
+  base_orientation_rpy_deg: [0.0, 0.0, 0.0]
+  fix_base: true
+  enabled_self_collisions: true
+  # Match Isaac Lab's high-PD manipulator mode: gravity is disabled only for
+  # OpenArm rigid links. Scene objects keep normal gravity and contact physics.
+  gravity_enabled: false
+  active_arm: left
+  inactive_arm: right
+  moveit_groups:
+    active_arm: left_arm
+    inactive_arm: right_arm
+    active_gripper: left_gripper
+  end_effector_link: openarm_left_hand
+  home:
+    # Mirrored raised poses keep both forearms and grippers above the table.
+    left: [-2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0]
+    right: [2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0]
+  gripper:
+    open_position: 0.040
+    closed_position: 0.006
+    max_effort: 35.0
+  joint_limits_source: official_openarm_description
+  conservative_velocity_scale: 0.20
+  conservative_acceleration_scale: 0.15
+  joint_names:
+    left:
+      - openarm_left_joint1
+      - openarm_left_joint2
+      - openarm_left_joint3
+      - openarm_left_joint4
+      - openarm_left_joint5
+      - openarm_left_joint6
+      - openarm_left_joint7
+    right:
+      - openarm_right_joint1
+      - openarm_right_joint2
+      - openarm_right_joint3
+      - openarm_right_joint4
+      - openarm_right_joint5
+      - openarm_right_joint6
+      - openarm_right_joint7
+  controller_actions:
+    left: /left_joint_trajectory_controller/follow_joint_trajectory
+    right: /right_joint_trajectory_controller/follow_joint_trajectory
+    left_gripper: /left_gripper_controller/gripper_cmd
+    right_gripper: /right_gripper_controller/gripper_cmd

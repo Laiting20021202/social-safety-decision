@@ -1,0 +1,60 @@
+schema_version: 1
+mode: ground_truth
+frames:
+  planning: world
+  obstacle: world
+thresholds_m:
+  # Let MoveIt route around a visible hand while it is still well separated.
+  # The padded Planning Scene box remains the collision authority; these
+  # distances are for slowdown/cancellation, not a second oversized wall.
+  # Start the local detour early enough to cover perception + OMPL latency.
+  # PAUSE no longer means waiting in place: a guarded side route is planned
+  # and executed while the obsolete trajectory remains cancelled.
+  warning: 0.22
+  pause: 0.14
+  # Distance is measured from the observed hand surface to a 5 cm robot-link
+  # capsule.  Latch only at near-contact; MoveIt's padded collision geometry
+  # and the PAUSE/REPLAN band remain the primary avoidance authority.
+  emergency_stop: 0.025
+clearance:
+  resume_distance_m: 0.26
+  minimum_clear_duration_sec: 1.0
+timeouts:
+  # EdgeTAM + RGB hand semantics is measured at roughly 1.5--2 Hz on this
+  # workstation. This remains fail-safe while avoiding false E-stops between
+  # valid neural inference outputs.
+  # EdgeTAM deliberately keeps a tracked mask alive for up to 3.0 s.  The
+  # supervisor timeout must be slightly longer or a normal inference gap is
+  # misclassified as a perception failure and causes a false E-stop.
+  obstacle_data_sec: 3.2
+  joint_state_sec: 0.20
+velocity_scaling:
+  safe: 1.0
+  warning: 0.35
+  pause: 0.0
+behavior:
+  cancel_on_pause: true
+  replan_after_clear: true
+  # Reject one-frame mask/depth outliers without delaying the immediate PAUSE.
+  # PAUSE immediately cancels the stale path and starts the collision-checked
+  # upward escape. Allow that maneuver time to start before latching a hard
+  # stop; persistent near-contact still becomes EMERGENCY_STOP.
+  emergency_confirmation_sec: 0.80
+  # Only pose_goal's dedicated upward/away trajectory can request this finite
+  # grace. If it cannot produce another checked escape or increase clearance,
+  # the normal near-contact E-stop latches after this interval.
+  escape_execution_grace_sec: 3.0
+  # Cancel the now-invalid path first, then let MoveIt compute a new spatial
+  # route around the padded live obstacle. Emergency distance remains latched.
+  replan_delay_sec: 0.30
+  maximum_replan_attempts: 3
+  fail_safe_on_timeout: true
+topics:
+  ground_truth_pose: /sim/ground_truth/hand_pose
+  ground_truth_collision: /sim/ground_truth/hand_collision
+  ground_truth_min_distance: /sim/ground_truth/min_distance
+  perception_cloud: /perception/obstacles
+  planning_scene: /planning_scene
+  safety_state: /openarm/safety/state
+  velocity_scaling: /openarm/safety/velocity_scaling
+  events: /openarm/events

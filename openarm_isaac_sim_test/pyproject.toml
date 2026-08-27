@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openarm-isaac-sim-test"
+version = "0.1.0"
+description = "Deterministic OpenArm sorting and dynamic hand-obstacle validation harness"
+requires-python = ">=3.10,<3.13"
+dependencies = ["numpy>=1.23,<2", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.8"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["openarm_sim*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "ros2_ws/src/openarm_dynamic_avoidance", "ros2_ws/src/openarm_sorting_task", "ros2_ws/src/openarm_safety_bridge"]
+markers = [
+  "isaac: requires Isaac Sim and a usable GPU/display or headless runtime",
+  "ros: requires a sourced ROS 2 workspace",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

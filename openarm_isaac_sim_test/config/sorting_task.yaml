@@ -1,0 +1,164 @@
+schema_version: 1
+planning_frame: world
+move_group_action: /move_action
+planning_pipeline: ompl
+planner_id: RRTConnectkConfigDefault
+# Keep each attempt responsive. Boundary targets use the bounded progressive
+# tolerance below instead of holding the GUI in PLANNING for ten seconds.
+planning_time_sec: 6.0
+planning_attempts: 4
+active_group: left_arm
+end_effector_link: openarm_left_hand_tcp
+groups:
+  left: left_arm
+  right: right_arm
+end_effector_links:
+  left: openarm_left_hand_tcp
+  right: openarm_right_hand_tcp
+target_models:
+  left: left_target_cube
+  right: right_target_cube
+velocity_scaling: 0.20
+acceleration_scaling: 0.15
+# Keep the final TCP on the selected marker face.  Route waypoints retain
+# their looser tolerances below; only the final visible touch is this strict.
+pose_tolerance_m: 0.015
+# Keep the first attempt precise. A target placed at the physical workspace
+# boundary may need a bounded IK sampling fallback; 45 mm is still smaller
+# than the visible target plus gripper envelope and dramatically improves IK
+# sampling at maximum reach.
+maximum_pose_tolerance_m: 0.045
+# The 5.5 cm Gazebo marker represents a point to touch. Plan to its near
+# surface (half the marker size) instead of asking the TCP to occupy the visual
+# cube center, which can lie just beyond the arm's exact IK boundary.
+target_contact_offset_m: 0.0275
+orientation_tolerance_rad: 0.70
+# The current GUI specifies an XYZ target, not a grasp orientation. Keeping
+# orientation free gives MoveIt the same floating-end-effector interaction
+# style used by motion-policy demos and avoids inventing a grasp pose.
+pose_goal_constrain_orientation: false
+dynamic_under_route:
+  enabled: true
+  # In Dynamic Policy mode a straight TCP segment that intersects the live
+  # hand box is split into entry/exit waypoints below it. MoveIt still plans
+  # and collision-checks every joint trajectory segment.
+  collision_margin_m: 0.025
+  # The segmented hand box is intentionally conservative.  A large extra
+  # clearance pushed the far waypoint beyond the left arm's low workspace;
+  # keep the TCP outside the padded box without overshooting the goal side.
+  horizontal_clearance_m: 0.03
+  entry_horizontal_clearance_m: 0.12
+  exit_horizontal_clearance_m: 0.055
+  # A moving hand may overtake the TCP while the current trajectory is being
+  # cancelled.  Replanning then uses a sideways entry and may move at most
+  # this far backwards along the current TCP-to-marker direction.
+  maximum_backtrack_m: 0.02
+  # PAUSE can be caused by an elbow/forearm even when the TCP line misses the
+  # obstacle. Keep a wider lateral envelope for that forced local sidestep.
+  forced_local_clearance_m: 0.06
+  approach_clearance_m: 0.08
+  # Account for the gripper/finger collision envelope, not only the TCP point.
+  # Four centimetres let the TCP clear the box while a finger still intersected
+  # it, causing the repeated PAUSE/REPLAN loop seen after moving the hand.
+  vertical_clearance_m: 0.12
+  minimum_tcp_z_m: 0.16
+  # If the table makes the requested below-hand route impossible, try a
+  # collision-checked upper guide before falling back to a lateral guide.
+  maximum_tcp_z_m: 1.12
+  waypoint_tolerance_m: 0.025
+  exit_waypoint_tolerance_m: 0.05
+  # After crossing below the hand, rise on the clear side before sampling the
+  # tight final target. This avoids a singular low-posture final connection.
+  recover_waypoint_tolerance_m: 0.05
+  route_goal_tolerance_m: 0.015
+  planning_retry_attempts: 1
+  planning_retry_backoff_sec: 0.8
+  # A moving hand can invalidate a waypoint while OMPL is still sampling.
+  # Keep those attempts short and rebuild the route around the latest cloud.
+  planning_time_sec: 3.0
+  planning_attempts: 2
+  route_refresh_motion_m: 0.05
+  maximum_route_refresh_attempts: 4
+maximum_replan_attempts: 3
+replan_backoff_sec: 0.75
+# During an active marker request, PAUSE -> REPLAN retains the marker and
+# rebuilds a local progress-limited route from the measured TCP.  It does not
+# insert a Home retreat.
+# A visible hand remains safety-active even after a requested motion has
+# completed. The closest held arm lifts vertically through MoveIt, holds, then
+# returns to the exact saved joint posture after the hand has remained clear.
+# This is intentionally independent of picking and never inserts Home.
+always_on_avoidance:
+  enabled: true
+  trigger_distance_m: 0.18
+  tcp_trigger_distance_m: 0.16
+  release_distance_m: 0.26
+  # A held target uses a deliberately simple reflex: keep TCP X/Y and tool
+  # orientation, lift vertically, then restore the exact saved joint pose.
+  vertical_lift_m: 0.14
+  vertical_clearance_m: 0.10
+  velocity_scaling: 0.12
+  acceleration_scaling: 0.10
+  # Once SafetyBridge has confirmed a clear scene, return with the normal
+  # task speed instead of retaining the deliberately slow emergency lift.
+  restore_velocity_scaling: 0.20
+  restore_acceleration_scaling: 0.15
+  # Restoring because the robot retreated creates an endless evade/restore
+  # loop. Require the perceived hand itself to move as well, but keep this
+  # below a normal hand-withdraw gesture so the saved target is not stranded.
+  restore_obstacle_motion_m: 0.08
+  # SafetyBridge already requires one continuous clear second before SAFE.
+  # Only a short extra debounce is needed before restoring the saved target.
+  clear_duration_sec: 0.25
+  retry_backoff_sec: 2.0
+# A soft PAUSE is an active evasive maneuver, not a stationary hold.  The
+# affected TCP is lifted above and shifted away from the live hand box through
+# a dedicated MoveIt collision-checked trajectory.  Ordinary PAUSE paths stay
+# blocked; only this escape trajectory may bypass the dynamic output gate.
+crisis_avoidance:
+  enabled: true
+  minimum_lift_m: 0.16
+  horizontal_escape_m: 0.10
+  vertical_clearance_m: 0.14
+  maximum_tcp_z_m: 1.12
+  tcp_trigger_distance_m: 0.24
+  pose_tolerance_m: 0.035
+  planning_time_sec: 2.0
+  planning_attempts: 2
+  velocity_scaling: 0.20
+  planning_retry_attempts: 1
+# Gazebo-only recovery. A target, Home return, or idle evade interrupted by a
+# latched near-contact stop retains its exact current request. Reset is sent
+# only after the perceived hand itself moved and link clearance stayed clear;
+# real-hardware configurations must disable this behavior.
+dynamic_estop_recovery:
+  enabled: true
+  obstacle_motion_m: 0.08
+  release_distance_m: 0.26
+  clear_duration_sec: 1.5
+# A waiting target is retried when the measured obstacle box has genuinely
+# moved, even if it remains visible and therefore never publishes REMOVE.
+waiting_obstacle_retry_motion_m: 0.06
+# Perception center jitter must never reset the same impossible IK request
+# forever. A genuinely moved hand gets two fresh route attempts.
+waiting_obstacle_retry_attempts: 2
+grasp:
+  mode: auto
+  physical_attempts: 2
+  magnetic_max_distance_m: 0.065
+# Local hand +Z points toward the table; Rx(pi) keeps the parallel fingers
+# vertical while staying within the asymmetric left-arm wrist limits.
+tool_orientation_xyzw: [1.0, 0.0, 0.0, 0.0]
+offsets:
+  pre_grasp_z: 0.24
+  # The hand-link origin is 83.5 mm above the TCP. Extra clearance accounts
+  # for constraint-region sampling and keeps finger collision meshes off the
+  # tabletop while the selected cube is converted to an attached object.
+  grasp_z: 0.13
+  lift_z: 0.20
+  place_z: 0.08
+  retreat_z: 0.10
+bin_drop_positions:
+  red: [-0.22, 0.20, 0.97]
+  green: [-0.22, 0.38, 0.97]
+  blue: [-0.06, 0.29, 0.97]
