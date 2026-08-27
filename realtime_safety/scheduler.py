@@ -6,20 +6,23 @@ import queue
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 
-from realtime_safety.config import AppConfig
+from realtime_safety.config import AppConfig, SegmentationConfig
 from realtime_safety.gui.gui_state import GuiState
 from realtime_safety.gui.video_overlay import draw_video_overlay
 from realtime_safety.performance import PerformanceMonitor
 from realtime_safety.pipeline.camera_motion import CameraMotionEstimator
+from realtime_safety.pipeline.apriltag_calibration import AprilTagScaleCalibrator
 from realtime_safety.pipeline.danger_zone import DangerZonePredictor
 from realtime_safety.pipeline.frame_queue import LatestQueue
 from realtime_safety.pipeline.ground_plane import GroundPlaneEstimator
 from realtime_safety.pipeline.local_planner import LocalSafetyPlanner, PlannerResult
+from realtime_safety.pipeline.mast3r_slam_adapter import Mast3rSlamAdapter
 from realtime_safety.pipeline.monocular_depth import MonocularDepthBackend
 from realtime_safety.pipeline.obstacle_3d import ObstacleExtractor3D
 from realtime_safety.pipeline.pointcloud import voxel_downsample
@@ -61,6 +64,20 @@ _OBSTACLE_COLORS: dict[str, tuple[int, int, int]] = {
     "dog": (64, 224, 255),
     "cat": (64, 224, 255),
 }
+
+
+def _model_switch_output_gate(
+    current_valid: bool,
+    previous_valid: bool,
+    hold_updates: int,
+) -> tuple[bool, bool, int]:
+    """Avoid a false empty output while a new model rebuilds confirmation."""
+
+    if current_valid:
+        return True, True, 0
+    if previous_valid and hold_updates > 0:
+        return False, True, hold_updates - 1
+    return True, False, 0
 
 
 def _observation_pointcloud(
@@ -114,19 +131,42 @@ def _observation_pointcloud(
         metric_scale=source_cloud.metric_scale,
         reference_depth_m=source_cloud.reference_depth_m,
         reference_observed_depth=source_cloud.reference_observed_depth,
+        apriltag_locked=source_cloud.apriltag_locked,
+        apriltag_id=source_cloud.apriltag_id,
+        apriltag_size_m=source_cloud.apriltag_size_m,
+        apriltag_observed_edge_m=source_cloud.apriltag_observed_edge_m,
+        apriltag_scale_correction=source_cloud.apriltag_scale_correction,
+        apriltag_center_xyz=source_cloud.apriltag_center_xyz,
+        apriltag_corners_xyz=source_cloud.apriltag_corners_xyz,
+        apriltag_age_frames=source_cloud.apriltag_age_frames,
     )
 
 
-def _observations_with_short_hold(
+def _needs_yolo_pipeline(requested_mode: str, active_mode: str) -> bool:
+    """Keep YOLO alive until a requested Edge source actually takes over.
+
+    The requested source must run so it can produce the first candidate cloud;
+    the currently active YOLO source must also keep running during a pending
+    switch.  This is the worker-side half of the obstacle-cloud mux's atomic
+    handoff contract.
+    """
+
+    return "yolo" in {str(requested_mode), str(active_mode)}
+
+
+def _current_observations_with_fusion(
     observations: list[ObstacleObservation3D],
-    tracks: list[Track3DState],
     cache: dict[int, ObstacleObservation3D],
-    max_missing: int,
-    timestamp: float,
     voxel_size: float = 0.0,
     max_center_step_m: float = 0.18,
 ) -> list[ObstacleObservation3D]:
-    """Stabilize measured clusters and keep them across brief detector misses."""
+    """Stabilize only clusters measured in the current depth frame.
+
+    Kinematic tracks may be retained for conservative safety prediction, but
+    their previous point samples are not measurements of the current scene.
+    Returning cached samples during a miss left a magenta cloud at the image
+    boundary after a hand had exited the camera view.
+    """
 
     result: list[ObstacleObservation3D] = []
     observed_ids = {observation.track_id for observation in observations}
@@ -141,44 +181,8 @@ def _observations_with_short_hold(
         cache[observation.track_id] = stabilized
         result.append(stabilized)
 
-    active_ids = {track.track_id for track in tracks}
-    for track in tracks:
-        if (
-            track.track_id in observed_ids
-            or track.missing_count <= 0
-            or track.missing_count > max_missing
-        ):
-            continue
-        previous = cache.get(track.track_id)
-        if previous is None or previous.points is None or not len(previous.points):
-            continue
-        displacement = np.asarray(track.position_xyz - previous.position_xyz, dtype=np.float32)
-        distance = float(np.linalg.norm(displacement))
-        # Short holds prevent flicker, but a noisy monocular velocity must not
-        # launch a stale obstacle cluster across the scene.
-        if distance > 0.35:
-            displacement *= 0.35 / distance
-        points = np.asarray(previous.points, dtype=np.float32) + displacement
-        result.append(
-            ObstacleObservation3D(
-                track_id=track.track_id,
-                class_name=track.class_name,
-                confidence=max(0.05, previous.confidence * 0.85**track.missing_count),
-                position_xyz=previous.position_xyz + displacement,
-                bbox3d=BBox3D(
-                    minimum=previous.bbox3d.minimum + displacement,
-                    maximum=previous.bbox3d.maximum + displacement,
-                ),
-                radius=previous.radius,
-                point_count=len(points),
-                timestamp=timestamp,
-                points=points,
-            )
-        )
-        cache[track.track_id] = result[-1]
-
     for track_id in tuple(cache):
-        if track_id not in active_ids:
+        if track_id not in observed_ids:
             del cache[track_id]
     return result
 
@@ -379,8 +383,18 @@ class RealtimePipeline:
         yolo_obstacle_pointcloud_publisher: Any | None = None,
         arm_obstacle_relationship_publisher: Any | None = None,
         camera_preview_publisher: Any | None = None,
+        obstacle_backend_controller: Any | None = None,
+        obstacle_cloud_mux: Any | None = None,
+        segmentation_factory: (
+            Callable[[SegmentationConfig, str], SegmentationBackend] | None
+        ) = None,
+        mast3r_slam_backend: Any | None = None,
+        openarm_joint_bridge: Any | None = None,
+        openarm_control_bridge: Any | None = None,
     ) -> None:
         self.config = config
+        self._segmentation_models_must_be_local = segmentation_factory is None
+        self._segmentation_factory = segmentation_factory or create_segmentation_backend
         self.segmentation = segmentation_backend
         if self.segmentation is None and (
             config.mode == "safety"
@@ -388,13 +402,20 @@ class RealtimePipeline:
             or yolo_obstacle_pointcloud_publisher is not None
             or arm_obstacle_relationship_publisher is not None
         ):
-            self.segmentation = create_segmentation_backend(config.segmentation, config.device)
+            self.segmentation = self._segmentation_factory(
+                config.segmentation,
+                config.device,
+            )
+        self._depth_backend_injected = depth_backend is not None
         self.depth = depth_backend or (
             VideoDepthBackend(config.reconstruction, config.device)
             if config.reconstruction.depth_mode == "video_depth"
             else MonocularDepthBackend(config.reconstruction, config.device)
         )
         self.st4r = St4RTrackAdapter(config.reconstruction, config.device)
+        self.mast3r_slam = mast3r_slam_backend or Mast3rSlamAdapter(
+            config.reconstruction, config.device
+        )
         self.dashboard = dashboard
         self.scene = scene
         self.session_logger = session_logger
@@ -405,6 +426,18 @@ class RealtimePipeline:
             arm_obstacle_relationship_publisher
         )
         self.camera_preview_publisher = camera_preview_publisher
+        self.obstacle_backend_controller = obstacle_backend_controller
+        self.obstacle_cloud_mux = obstacle_cloud_mux
+        self.openarm_joint_bridge = openarm_joint_bridge
+        self.openarm_control_bridge = openarm_control_bridge
+        initial_obstacle_mode = (
+            str(config.obstacle_perception.backend)
+            if config.obstacle_perception.enabled
+            else "yolo"
+        )
+        self._obstacle_mode_lock = threading.RLock()
+        self._requested_obstacle_backend_mode = initial_obstacle_mode
+        self._active_obstacle_backend_mode = initial_obstacle_mode
         self.gui_state = GuiState()
         self.performance = PerformanceMonitor(config.device)
         self.adaptive = AdaptiveRealtimeController(config)
@@ -439,7 +472,28 @@ class RealtimePipeline:
         self._captured_frames = 0
         self._errors: dict[str, str] = {}
         self._gpu_lock = threading.Lock()
-        self._models_ready = {"segmentation": False, "depth": False, "st4rtrack": False}
+        configured_models = tuple(
+            dict.fromkeys(
+                (
+                    config.segmentation.model,
+                    *config.segmentation.model_options,
+                )
+            )
+        )
+        self._segmentation_model_options = configured_models
+        self._segmentation_switch_lock = threading.Lock()
+        self._segmentation_switch_generation = 0
+        self._segmentation_switch_request: tuple[int, str] | None = None
+        self._active_segmentation_model = config.segmentation.model
+        self._models_ready = {
+            "segmentation": False,
+            "depth": False,
+            "st4rtrack": False,
+            "mast3r_slam": False,
+        }
+        self._reconstruction_mode_lock = threading.RLock()
+        self._requested_reconstruction_mode = config.reconstruction.depth_mode
+        self._active_reconstruction_mode = config.reconstruction.depth_mode
         self._segmentation_ms: float | None = None
         self._reconstruction_ms: float | None = None
         self._final_frame_index = -1
@@ -455,9 +509,407 @@ class RealtimePipeline:
     def source_done(self) -> bool:
         return self._source_done.is_set()
 
+    @property
+    def active_segmentation_model(self) -> str:
+        with self._segmentation_switch_lock:
+            return self._active_segmentation_model
+
+    @property
+    def segmentation_model_options(self) -> tuple[str, ...]:
+        return self._segmentation_model_options
+
+    @property
+    def reconstruction_mode(self) -> str:
+        with self._reconstruction_mode_lock:
+            return self._requested_reconstruction_mode
+
+    @property
+    def active_reconstruction_mode(self) -> str:
+        with self._reconstruction_mode_lock:
+            return self._active_reconstruction_mode
+
+    @property
+    def reconstruction_ready(self) -> bool:
+        return any(
+            self._models_ready[name]
+            for name in ("depth", "st4rtrack", "mast3r_slam")
+        )
+
+    def ingest_external_pointcloud(self, cloud: PointCloudFrame) -> None:
+        """Install one synchronized metric RGB-D cloud as the current geometry."""
+
+        if self.config.reconstruction.depth_mode != "rgbd":
+            raise RuntimeError("external point clouds require depth_mode=rgbd")
+        with self._state_lock:
+            self._cloud = cloud
+            self._cloud_source_frame = self._latest_capture
+            self._cloud_version += 1
+            self._models_ready["depth"] = bool(cloud.valid)
+        self.performance.tick("reconstruction")
+        self._reconstruction_ms = float(cloud.inference_ms)
+        if self.pointcloud_publisher is not None:
+            try:
+                self.pointcloud_publisher.publish(cloud)
+            except Exception as exc:
+                if "pointcloud_topic" not in self._errors:
+                    LOGGER.exception("RGB-D point-cloud topic publication failed")
+                self._errors["pointcloud_topic"] = str(exc)
+        self._new_frame_event.set()
+
+    @property
+    def obstacle_backend_mode(self) -> str:
+        with self._obstacle_mode_lock:
+            return self._requested_obstacle_backend_mode
+
+    @property
+    def active_obstacle_backend_mode(self) -> str:
+        with self._obstacle_mode_lock:
+            return self._active_obstacle_backend_mode
+
+    def update_obstacle_mux_status(self, status: Any) -> None:
+        """Receive the source mux's atomic activation acknowledgement."""
+
+        active = str(status.active_mode)
+        requested = str(getattr(status, "requested_mode", active))
+        state = str(status.state)
+        with self._obstacle_mode_lock:
+            self._active_obstacle_backend_mode = active
+        if self.dashboard is None:
+            return
+        update = getattr(self.dashboard, "update_obstacle_backend_status", None)
+        if callable(update):
+            shown_backend = requested if state == "waiting" else active
+            metrics = None
+            if shown_backend == "yolo":
+                metrics = {
+                    "yolo_model": self.active_segmentation_model,
+                    "yolo_fps": "--",
+                    "yolo_latency_ms": (
+                        "--"
+                        if self._segmentation_ms is None
+                        else f"{self._segmentation_ms:.1f}"
+                    ),
+                    "track_count": "0",
+                    "output_points": "0",
+                }
+            update(
+                shown_backend,
+                state=state,
+                detail=str(status.message),
+                metrics=metrics,
+            )
+
+    def request_segmentation_model(self, model: str) -> bool:
+        """Queue an allowlisted model switch without blocking the GUI thread."""
+
+        requested = str(model).strip()
+        with self._segmentation_switch_lock:
+            status_generation = self._segmentation_switch_generation
+        if requested not in self._segmentation_model_options:
+            LOGGER.warning("Rejected unapproved segmentation model request: %r", requested)
+            self._update_segmentation_model_status(
+                self.active_segmentation_model,
+                error=f"未允許的模型 / Model is not allowlisted: {requested}",
+                ready=self._models_ready["segmentation"],
+                generation=status_generation,
+            )
+            return False
+        if self._segmentation_models_must_be_local and not Path(requested).is_file():
+            LOGGER.warning("Rejected missing local segmentation model: %r", requested)
+            self._update_segmentation_model_status(
+                self.active_segmentation_model,
+                error=f"找不到本機模型 / Local checkpoint not found: {requested}",
+                ready=self._models_ready["segmentation"],
+                generation=status_generation,
+            )
+            return False
+
+        with self._segmentation_switch_lock:
+            pending = self._segmentation_switch_request
+            if (
+                requested == self._active_segmentation_model
+                and self._models_ready["segmentation"]
+                and (pending is None or pending[1] == requested)
+            ):
+                active = self._active_segmentation_model
+                already_active = True
+                status_generation = self._segmentation_switch_generation
+            else:
+                self._segmentation_switch_generation += 1
+                self._segmentation_switch_request = (
+                    self._segmentation_switch_generation,
+                    requested,
+                )
+                active = self._active_segmentation_model
+                already_active = False
+                status_generation = self._segmentation_switch_generation
+        if already_active:
+            self._update_segmentation_model_status(
+                active,
+                ready=True,
+                generation=status_generation,
+            )
+        else:
+            self._update_segmentation_model_status(
+                active,
+                requested_model=requested,
+                ready=self._models_ready["segmentation"],
+                generation=status_generation,
+            )
+            LOGGER.info(
+                "Queued segmentation model switch: %s -> %s",
+                active,
+                requested,
+            )
+        return True
+
+    def _initialize_segmentation_backend(self) -> None:
+        if self.segmentation is None:
+            return
+        try:
+            self.segmentation.load()
+            with self._gpu_lock:
+                self.segmentation.warmup()
+            self._models_ready["segmentation"] = True
+            with self._state_lock:
+                self._errors.pop("segmentation", None)
+                self._errors.pop("segmentation_runtime", None)
+            with self._segmentation_switch_lock:
+                active = self._active_segmentation_model
+                pending = self._segmentation_switch_request
+            requested = (
+                pending[1]
+                if pending is not None and pending[1] != active
+                else None
+            )
+            self._update_segmentation_model_status(
+                active,
+                requested_model=requested,
+                ready=True,
+                generation=pending[0] if pending is not None else 0,
+            )
+        except Exception as exc:
+            LOGGER.exception("Segmentation initialization failed")
+            self._models_ready["segmentation"] = False
+            with self._state_lock:
+                self._errors["segmentation"] = str(exc)
+            self._update_segmentation_model_status(
+                self.active_segmentation_model,
+                error=str(exc),
+                ready=False,
+                generation=0,
+            )
+
+    def _apply_pending_segmentation_switch(
+        self,
+        handled_generation: int,
+        *,
+        preflight_frame: FramePacket | None = None,
+        require_tracking_preflight: bool = False,
+    ) -> tuple[int, bool]:
+        """Load and atomically swap one pending model from the inference worker."""
+
+        with self._segmentation_switch_lock:
+            request = self._segmentation_switch_request
+            active = self._active_segmentation_model
+        if request is None or request[0] <= handled_generation:
+            return handled_generation, False
+
+        generation, requested = request
+        if requested == active and self._models_ready["segmentation"]:
+            with self._state_lock:
+                self._errors.pop("segmentation_switch", None)
+            self._update_segmentation_model_status(
+                active,
+                ready=True,
+                generation=generation,
+            )
+            return generation, False
+        if require_tracking_preflight and preflight_frame is None:
+            # Keep the previous backend active until the exact live tracking
+            # path can be exercised. A predict-only warmup does not validate
+            # ByteTrack configuration or segmentation-mask conversion.
+            return handled_generation, False
+
+        candidate: SegmentationBackend | None = None
+        try:
+            candidate_config = replace(self.config.segmentation, model=requested)
+            candidate = self._segmentation_factory(candidate_config, self.config.device)
+            candidate.load()
+            with self._gpu_lock:
+                candidate.warmup()
+                if require_tracking_preflight:
+                    track_obstacles = getattr(candidate, "track_obstacles", None)
+                    if not callable(track_obstacles):
+                        raise RuntimeError(
+                            "Candidate backend does not support obstacle tracking"
+                        )
+                    track_obstacles(preflight_frame)
+                    reset_tracking = getattr(candidate, "reset_tracking", None)
+                    if callable(reset_tracking):
+                        reset_tracking()
+
+            with self._segmentation_switch_lock:
+                latest_request = self._segmentation_switch_request
+                stale = (
+                    self._stop_event.is_set()
+                    or latest_request != (generation, requested)
+                )
+                if not stale:
+                    previous = self.segmentation
+                    self.segmentation = candidate
+                    candidate = None
+                    self.config.segmentation = candidate_config
+                    self._active_segmentation_model = requested
+                else:
+                    previous = None
+
+            if stale:
+                LOGGER.info(
+                    "Discarding superseded segmentation model switch to %s",
+                    requested,
+                )
+                return generation, False
+
+            self._models_ready["segmentation"] = True
+            with self._state_lock:
+                self._errors.pop("segmentation", None)
+                self._errors.pop("segmentation_runtime", None)
+                self._errors.pop("segmentation_switch", None)
+            self._update_segmentation_model_status(
+                requested,
+                ready=True,
+                generation=generation,
+            )
+            if previous is not None:
+                self._close_segmentation_backend(previous)
+            LOGGER.info("Segmentation model is now active: %s", requested)
+            return generation, True
+        except Exception as exc:
+            LOGGER.exception(
+                "Could not switch segmentation model to %s; retaining %s",
+                requested,
+                active,
+            )
+            with self._segmentation_switch_lock:
+                latest_request = self._segmentation_switch_request
+            if latest_request == (generation, requested):
+                with self._state_lock:
+                    self._errors["segmentation_switch"] = str(exc)
+                self._update_segmentation_model_status(
+                    self.active_segmentation_model,
+                    error=str(exc),
+                    ready=self._models_ready["segmentation"],
+                    generation=generation,
+                )
+            return generation, False
+        finally:
+            if candidate is not None:
+                self._close_segmentation_backend(candidate)
+
+    def _close_segmentation_backend(self, backend: SegmentationBackend) -> None:
+        try:
+            backend.close()
+        except Exception as exc:
+            LOGGER.warning("Could not close segmentation backend cleanly: %s", exc)
+
+    def _update_segmentation_model_status(
+        self,
+        active_model: str,
+        *,
+        requested_model: str | None = None,
+        error: str | None = None,
+        ready: bool,
+        generation: int | None = None,
+    ) -> None:
+        update = getattr(self.dashboard, "update_obstacle_model_status", None)
+        if not callable(update):
+            return
+        try:
+            update(
+                active_model,
+                requested_model=requested_model,
+                error=error,
+                ready=ready,
+                generation=generation,
+            )
+        except Exception:
+            LOGGER.exception("Could not update the obstacle-model dashboard status")
+
+    def request_reconstruction_method(self, method: str) -> bool:
+        """Queue one allowlisted point-cloud method switch from the GUI."""
+
+        requested = str(method).strip().lower()
+        allowed = set(self.config.reconstruction.depth_mode_options)
+        if requested not in allowed:
+            LOGGER.warning("Rejected unsupported reconstruction method: %r", requested)
+            self._update_reconstruction_method_status(
+                self.active_reconstruction_mode,
+                requested_method=requested,
+                error=f"未允許的點雲方法 / Method is not allowlisted: {requested}",
+                ready=self.reconstruction_ready,
+            )
+            return False
+        if requested == "mast3r_slam":
+            try:
+                preflight = getattr(self.mast3r_slam, "preflight", None)
+                if callable(preflight):
+                    preflight()
+            except Exception as exc:
+                LOGGER.warning("Rejected unavailable MASt3R-SLAM switch: %s", exc)
+                self._update_reconstruction_method_status(
+                    self.active_reconstruction_mode,
+                    requested_method=requested,
+                    error=str(exc),
+                    ready=self.reconstruction_ready,
+                )
+                return False
+        with self._reconstruction_mode_lock:
+            active = self._active_reconstruction_mode
+            self._requested_reconstruction_mode = requested
+        if requested == active and self.reconstruction_ready:
+            self._update_reconstruction_method_status(active, ready=True)
+        else:
+            self._update_reconstruction_method_status(
+                active,
+                requested_method=requested,
+                ready=self.reconstruction_ready,
+            )
+            LOGGER.info("Queued reconstruction method switch: %s -> %s", active, requested)
+        return True
+
+    def _update_reconstruction_method_status(
+        self,
+        active_method: str,
+        *,
+        requested_method: str | None = None,
+        error: str | None = None,
+        ready: bool,
+    ) -> None:
+        update = getattr(
+            self.dashboard, "update_reconstruction_method_status", None
+        )
+        if not callable(update):
+            return
+        try:
+            update(
+                active_method,
+                requested_method=requested_method,
+                error=error,
+                ready=ready,
+            )
+        except Exception:
+            LOGGER.exception(
+                "Could not update the reconstruction-method dashboard status"
+            )
+
     def start_workers(self) -> None:
         if self._running:
             return
+        if self.obstacle_cloud_mux is not None:
+            self.obstacle_cloud_mux.start()
+        if self.obstacle_backend_controller is not None:
+            self.obstacle_backend_controller.start()
         if self.pointcloud_publisher is not None:
             self.pointcloud_publisher.start()
         if self.yolo_obstacle_pointcloud_publisher is not None:
@@ -466,6 +918,10 @@ class RealtimePipeline:
             self.arm_obstacle_relationship_publisher.start()
         if self.camera_preview_publisher is not None:
             self.camera_preview_publisher.start()
+        if self.openarm_joint_bridge is not None:
+            self.openarm_joint_bridge.start()
+        if self.openarm_control_bridge is not None:
+            self.openarm_control_bridge.start()
         self._stop_event.clear()
         self._new_frame_event.clear()
         if self.config.mode == "reconstruction":
@@ -569,6 +1025,100 @@ class RealtimePipeline:
             self.scene.reset()
 
     def handle_command(self, command: str, value: object | None = None) -> None:
+        if command.startswith("openarm_"):
+            if self.openarm_control_bridge is None:
+                LOGGER.warning("Ignoring OpenArm command because no control bridge is configured")
+                return
+            try:
+                self.openarm_control_bridge.send(command, value)
+            except (RuntimeError, ValueError) as exc:
+                LOGGER.warning("Rejected OpenArm GUI command %s=%r: %s", command, value, exc)
+            return
+        if command in {"reconstruction_method", "depth_mode"}:
+            self.request_reconstruction_method("" if value is None else str(value))
+            return
+        if command in {"obstacle_backend", "obstacle_pipeline"}:
+            requested = "" if value is None else str(value).strip().lower()
+            allowed = set(self.config.obstacle_perception.backend_options)
+            if requested not in allowed:
+                LOGGER.warning(
+                    "Ignoring unsupported obstacle backend request: %r",
+                    requested,
+                )
+                return
+            if (
+                self.obstacle_backend_controller is None
+                and self.obstacle_cloud_mux is None
+            ):
+                LOGGER.warning(
+                    "Ignoring obstacle backend request because no controller is configured"
+                )
+                return
+            with self._obstacle_mode_lock:
+                previous_requested = self._requested_obstacle_backend_mode
+                self._requested_obstacle_backend_mode = requested
+            update = getattr(
+                self.dashboard,
+                "update_obstacle_backend_status",
+                None,
+            )
+            if callable(update):
+                update(
+                    requested,
+                    state="loading",
+                    detail=(
+                        f"Switching controller obstacle cloud to {requested}; "
+                        "the previous source remains active until the first "
+                        "new cloud arrives"
+                    ),
+                )
+            try:
+                if self.obstacle_cloud_mux is not None:
+                    self.obstacle_cloud_mux.request_mode(requested)
+                if self.obstacle_backend_controller is not None:
+                    # YOLO owns its own segmentation worker. Disable only
+                    # EdgeTAM visual refinement while geometry keeps feeding
+                    # the private safety-fallback source.
+                    edge_mode = (
+                        "pointcloud" if requested == "yolo" else requested
+                    )
+                    self.obstacle_backend_controller.request_mode(edge_mode)
+                relationship_mode = getattr(
+                    self.arm_obstacle_relationship_publisher,
+                    "set_mode",
+                    None,
+                )
+                if callable(relationship_mode):
+                    relationship_mode(requested)
+            except Exception as exc:
+                LOGGER.exception("Obstacle backend switch failed")
+                with self._obstacle_mode_lock:
+                    self._requested_obstacle_backend_mode = previous_requested
+                if self.obstacle_cloud_mux is not None:
+                    try:
+                        self.obstacle_cloud_mux.request_mode(previous_requested)
+                    except Exception:
+                        LOGGER.exception("Could not roll back obstacle-cloud mux")
+                relationship_mode = getattr(
+                    self.arm_obstacle_relationship_publisher,
+                    "set_mode",
+                    None,
+                )
+                if callable(relationship_mode):
+                    try:
+                        relationship_mode(previous_requested)
+                    except Exception:
+                        LOGGER.exception("Could not roll back relationship mux")
+                if callable(update):
+                    update(
+                        previous_requested,
+                        state="error",
+                        detail=f"Obstacle backend switch failed: {exc}",
+                    )
+            return
+        if command in {"segmentation_model", "obstacle_model"}:
+            self.request_segmentation_model("" if value is None else str(value))
+            return
         if command == "camera_fov" and isinstance(value, tuple) and len(value) == 4:
             horizontal_fov, vertical_fov, image_width, image_height = map(float, value)
             if not (1.0 < horizontal_fov < 179.0 and 1.0 < vertical_fov < 179.0):
@@ -593,6 +1143,61 @@ class RealtimePipeline:
                 image_height,
             )
             self._reset_runtime_state()
+            return
+        if (
+            command == "camera_view_correction"
+            and isinstance(value, tuple)
+            and len(value) == 3
+        ):
+            try:
+                pitch_down, roll, yaw = map(float, value)
+                if not all(
+                    math.isfinite(angle) for angle in (pitch_down, roll, yaw)
+                ):
+                    raise ValueError("view angles must be finite")
+                setter = getattr(self.scene, "set_view_correction", None)
+                if callable(setter):
+                    setter(pitch_down, roll, yaw)
+                self.config.gui.view_pitch_down_deg = pitch_down
+                self.config.gui.view_roll_deg = roll
+                self.config.gui.view_yaw_deg = yaw
+            except (TypeError, ValueError) as exc:
+                LOGGER.warning(
+                    "Ignoring invalid camera view correction %s: %s",
+                    value,
+                    exc,
+                )
+            return
+        if command == "camera_top_down":
+            setter = getattr(self.scene, "set_top_down_view", None)
+            if callable(setter):
+                setter()
+            return
+        if command == "camera_bev_enabled":
+            enabled = bool(value)
+            setter = getattr(self.scene, "set_metric_bev_enabled", None)
+            if callable(setter):
+                setter(enabled)
+            self.config.gui.metric_bev_enabled = enabled
+            return
+        if command == "camera_bev_height":
+            try:
+                height_m = float(value)
+                if not math.isfinite(height_m) or height_m < 0.0:
+                    raise ValueError("height must be finite and non-negative")
+                setter = getattr(
+                    self.scene, "set_metric_bev_height_threshold", None
+                )
+                if callable(setter):
+                    setter(height_m)
+                self.config.gui.metric_bev_obstacle_height_m = height_m
+            except (TypeError, ValueError) as exc:
+                LOGGER.warning("Ignoring invalid BEV height %s: %s", value, exc)
+            return
+        if command == "camera_bev_recalibrate":
+            recalibrate = getattr(self.scene, "recalibrate_metric_bev", None)
+            if callable(recalibrate):
+                recalibrate()
             return
         if command in {"start", "detect_camera"}:
             raw_source = "auto" if command == "detect_camera" or value in (None, "") else str(value).strip()
@@ -661,6 +1266,14 @@ class RealtimePipeline:
             self.arm_obstacle_relationship_publisher.close()
         if self.camera_preview_publisher is not None:
             self.camera_preview_publisher.close()
+        if self.obstacle_backend_controller is not None:
+            self.obstacle_backend_controller.close()
+        if self.obstacle_cloud_mux is not None:
+            self.obstacle_cloud_mux.close()
+        if self.openarm_joint_bridge is not None:
+            self.openarm_joint_bridge.close()
+        if self.openarm_control_bridge is not None:
+            self.openarm_control_bridge.close()
         release_gpu_memory()
         if self.session_logger is not None:
             self.session_logger.close()
@@ -741,17 +1354,19 @@ class RealtimePipeline:
         tracker = StableTracker2D(self.config.tracking)
         robot_self_filter = RobotSelfFilter(self.config.segmentation)
         camera_motion = CameraMotionEstimator()
-        try:
-            self.segmentation.load()
-            with self._gpu_lock:
-                self.segmentation.warmup()
-            self._models_ready["segmentation"] = True
-        except Exception as exc:
-            LOGGER.exception("Segmentation initialization failed")
-            self._errors["segmentation"] = str(exc)
+        self._initialize_segmentation_backend()
         last_segmentation = 0.0
         reset_counter = self._reset_counter
+        handled_model_generation = 0
         while not self._stop_event.is_set():
+            handled_model_generation, model_switched = (
+                self._apply_pending_segmentation_switch(handled_model_generation)
+            )
+            if model_switched:
+                tracker.reset()
+                robot_self_filter = RobotSelfFilter(self.config.segmentation)
+                camera_motion.reset()
+                last_segmentation = 0.0
             try:
                 frame = self.capture_queue.get_latest(timeout=0.05)
             except queue.Empty:
@@ -786,51 +1401,176 @@ class RealtimePipeline:
             motion = camera_motion.update(frame.bgr, exclusion)
             with self._state_lock:
                 self._perceptions.append(PerceptionResult(frame, detections, motion.confidence))
-        self.segmentation.close()
+        if self.segmentation is not None:
+            self._close_segmentation_backend(self.segmentation)
 
     def _reconstruction_worker(self) -> None:
-        depth_mode = self.config.reconstruction.depth_mode
-        needs_depth_fallback = depth_mode != "st4rtrack" or self.config.mode == "safety"
-        if needs_depth_fallback:
-            try:
-                self.depth.load()
-                with self._gpu_lock:
-                    self.depth.warmup()
+        initial_depth_backend = self.depth
+        apriltag_calibrator = (
+            AprilTagScaleCalibrator(self.config.reconstruction)
+            if self.config.reconstruction.apriltag_enabled
+            else None
+        )
+
+        def close_backends() -> None:
+            for name, backend in (
+                ("depth", self.depth),
+                ("st4rtrack", self.st4r),
+                ("mast3r_slam", self.mast3r_slam),
+            ):
+                try:
+                    backend.close()
+                except Exception as exc:
+                    LOGGER.warning("Could not close %s backend cleanly: %s", name, exc)
+                self._models_ready[name] = False
+            release_gpu_memory()
+
+        def load_depth_backend(mode: str, *, initial: bool) -> None:
+            use_injected = initial and self._depth_backend_injected
+            if use_injected:
+                self.depth = initial_depth_backend
+            elif mode == "video_depth":
+                self.depth = VideoDepthBackend(
+                    self.config.reconstruction, self.config.device
+                )
+            else:
+                self.depth = MonocularDepthBackend(
+                    self.config.reconstruction, self.config.device
+                )
+            self.depth.load()
+            with self._gpu_lock:
+                self.depth.warmup()
+            self._models_ready["depth"] = True
+
+        def load_mode(requested: str, *, initial: bool) -> str:
+            if requested == "rgbd":
+                # Metric geometry arrives through RgbdSceneBridge. Do not load
+                # or warm a monocular depth network on the simulator GPU.
                 self._models_ready["depth"] = True
-            except Exception as exc:
-                if depth_mode == "video_depth":
-                    LOGGER.warning("Video depth unavailable; using per-frame Depth Anything V2 fallback: %s", exc)
-                    self._errors["video_depth"] = str(exc)
-                    self.depth = MonocularDepthBackend(self.config.reconstruction, self.config.device)
-                    try:
-                        self.depth.load()
-                        with self._gpu_lock:
-                            self.depth.warmup()
-                        self._models_ready["depth"] = True
-                    except Exception as fallback_exc:
-                        LOGGER.exception("Depth fallback initialization failed")
-                        self._errors["depth"] = str(fallback_exc)
-                else:
-                    LOGGER.exception("Depth initialization failed")
-                    self._errors["depth"] = str(exc)
-        if depth_mode in {"st4rtrack", "hybrid"}:
-            try:
-                self.st4r.load()
+                return requested
+            if requested == "mast3r_slam":
                 with self._gpu_lock:
-                    self.st4r.warmup()
-                self._models_ready["st4rtrack"] = True
+                    self.mast3r_slam.load()
+                    self.mast3r_slam.warmup()
+                self._models_ready["mast3r_slam"] = True
+                return requested
+            if requested == "st4rtrack":
+                try:
+                    self.st4r.load()
+                    with self._gpu_lock:
+                        self.st4r.warmup()
+                    self._models_ready["st4rtrack"] = True
+                    return requested
+                except Exception as exc:
+                    self._errors["st4rtrack"] = str(exc)
+                    LOGGER.warning(
+                        "St4RTrack unavailable; using fast-depth fallback: %s", exc
+                    )
+                    load_depth_backend("fast_depth", initial=initial)
+                    return "fast_depth"
+            if requested == "hybrid":
+                load_depth_backend("fast_depth", initial=initial)
+                try:
+                    self.st4r.load()
+                    with self._gpu_lock:
+                        self.st4r.warmup()
+                    self._models_ready["st4rtrack"] = True
+                except Exception as exc:
+                    self._errors["st4rtrack"] = str(exc)
+                    LOGGER.warning(
+                        "St4RTrack unavailable; hybrid will use fast depth: %s", exc
+                    )
+                return requested
+            try:
+                load_depth_backend(requested, initial=initial)
+                return requested
             except Exception as exc:
-                LOGGER.warning("St4RTrack unavailable; using fast-depth fallback: %s", exc)
-                self._errors["st4rtrack"] = str(exc)
+                if requested != "video_depth":
+                    raise
+                self._errors["video_depth"] = str(exc)
+                LOGGER.warning(
+                    "Video depth unavailable; using per-frame Depth Anything V2 "
+                    "fallback: %s",
+                    exc,
+                )
+                try:
+                    self.depth.close()
+                except Exception:
+                    pass
+                self._models_ready["depth"] = False
+                load_depth_backend("fast_depth", initial=False)
+                return "fast_depth"
+
+        def activate_mode(requested: str, *, initial: bool) -> str:
+            previous = self.active_reconstruction_mode
+            self._update_reconstruction_method_status(
+                previous,
+                requested_method=requested,
+                ready=self.reconstruction_ready,
+            )
+            if not initial:
+                close_backends()
+            switch_error: Exception | None = None
+            try:
+                active = load_mode(requested, initial=initial)
+            except Exception as exc:
+                switch_error = exc
+                LOGGER.exception(
+                    "Could not activate reconstruction method %s; loading fast depth",
+                    requested,
+                )
+                with self._state_lock:
+                    self._errors["reconstruction_switch"] = str(exc)
+                close_backends()
+                try:
+                    load_depth_backend("fast_depth", initial=False)
+                    active = "fast_depth"
+                except Exception as fallback_exc:
+                    LOGGER.exception("Depth fallback initialization failed")
+                    with self._state_lock:
+                        self._errors["depth"] = str(fallback_exc)
+                    active = requested
+            with self._reconstruction_mode_lock:
+                self._active_reconstruction_mode = active
+                self._requested_reconstruction_mode = active
+                self.config.reconstruction.depth_mode = active
+            if switch_error is None:
+                with self._state_lock:
+                    self._errors.pop("reconstruction_switch", None)
+                    self._errors.pop("reconstruction_runtime", None)
+                self._update_reconstruction_method_status(active, ready=True)
+            else:
+                self._update_reconstruction_method_status(
+                    active,
+                    requested_method=requested,
+                    error=str(switch_error),
+                    ready=self.reconstruction_ready,
+                )
+            if not initial:
+                self._reset_runtime_state()
+                if apriltag_calibrator is not None:
+                    apriltag_calibrator.reset()
+            return active
+
+        depth_mode = activate_mode(self.reconstruction_mode, initial=True)
         anchor: FramePacket | None = None
         runtime_stream = _make_cuda_stream(self.config.device) if self.config.mode == "reconstruction" else None
         last_depth = 0.0
         last_st4r = 0.0
+        last_mast3r_slam = 0.0
         pending_frame: FramePacket | None = None
         reset_counter = self._reset_counter
         while not self._stop_event.is_set():
-            if self.config.people_overlay and not self._models_ready["segmentation"] and "segmentation" not in self._errors:
-                self._stop_event.wait(0.01)
+            requested_mode = self.reconstruction_mode
+            if requested_mode != depth_mode:
+                depth_mode = activate_mode(requested_mode, initial=False)
+                anchor = None
+                pending_frame = None
+                last_depth = last_st4r = last_mast3r_slam = 0.0
+                reset_counter = self._reset_counter
+                continue
+            if depth_mode == "rgbd":
+                self._stop_event.wait(0.05)
                 continue
             if pending_frame is None:
                 try:
@@ -847,11 +1587,17 @@ class RealtimePipeline:
                 anchor = None
                 pending_frame = None
                 self.st4r.reset()
+                self.mast3r_slam.reset()
                 if hasattr(self.depth, "reset"):
                     self.depth.reset()
+                if apriltag_calibrator is not None:
+                    apriltag_calibrator.reset()
                 reset_counter = self._reset_counter
             now = time.perf_counter()
             st4r_due = now - last_st4r >= 1.0 / max(self.config.reconstruction.frequency_hz, 0.1)
+            mast3r_slam_due = now - last_mast3r_slam >= 1.0 / max(
+                self.config.reconstruction.frequency_hz, 0.1
+            )
             depth_rate = (
                 self.config.reconstruction.fast_depth_frequency_hz
                 if depth_mode in {"hybrid", "fast_depth"}
@@ -860,14 +1606,26 @@ class RealtimePipeline:
             depth_due = now - last_depth >= 1.0 / max(depth_rate, 0.1)
             use_st4r = self._models_ready["st4rtrack"] and depth_mode in {"st4rtrack", "hybrid"} and st4r_due
             use_depth = self._models_ready["depth"] and depth_due and (depth_mode != "st4rtrack" or not self._models_ready["st4rtrack"])
-            if not use_st4r and not use_depth:
+            use_mast3r_slam = (
+                self._models_ready["mast3r_slam"]
+                and depth_mode == "mast3r_slam"
+                and mast3r_slam_due
+            )
+            if not use_st4r and not use_depth and not use_mast3r_slam:
                 pending_frame = frame
                 self._stop_event.wait(0.005)
                 continue
             pending_frame = None
             start = time.perf_counter()
             try:
-                if use_st4r:
+                if use_mast3r_slam:
+                    # The inference itself runs in an isolated process, but
+                    # holding this lock still prevents the local segmentation
+                    # worker from competing for the same GPU concurrently.
+                    with self._gpu_lock:
+                        cloud = self.mast3r_slam.infer(frame)
+                    last_mast3r_slam = start
+                elif use_st4r:
                     if anchor is None:
                         anchor = frame
                         self.st4r.set_anchor(frame)
@@ -904,6 +1662,8 @@ class RealtimePipeline:
                     cloud.pointmap *= self.config.manual_scale
                     if cloud.tracking_points is not None:
                         cloud.tracking_points *= self.config.manual_scale
+                if apriltag_calibrator is not None:
+                    cloud = apriltag_calibrator.calibrate(frame.bgr, cloud)
                 cloud.points = cloud.points[: self.config.reconstruction.max_points]
                 cloud.colors = cloud.colors[: len(cloud.points)]
                 cloud.confidence = cloud.confidence[: len(cloud.points)]
@@ -923,8 +1683,11 @@ class RealtimePipeline:
             except Exception as exc:
                 LOGGER.exception("Reconstruction failed")
                 self._errors["reconstruction_runtime"] = str(exc)
-        self.st4r.close()
-        self.depth.close()
+                if depth_mode == "mast3r_slam":
+                    self._models_ready["mast3r_slam"] = False
+                    with self._reconstruction_mode_lock:
+                        self._requested_reconstruction_mode = "fast_depth"
+        close_backends()
 
     def _people_worker(self) -> None:
         if self.segmentation is None:
@@ -943,30 +1706,185 @@ class RealtimePipeline:
         tracker_3d = Tracker3D(self.config.tracking)
         robot_self_filter = RobotSelfFilter(self.config.segmentation)
         observation_cache: dict[int, ObstacleObservation3D] = {}
-        native_obstacle_tracker = callable(
-            getattr(self.segmentation, "track_obstacles", None)
-        )
-        try:
-            self.segmentation.load()
-            with self._gpu_lock:
-                self.segmentation.warmup()
-            self._models_ready["segmentation"] = True
-        except Exception as exc:
-            LOGGER.exception("YOLO person initialization failed")
-            self._errors["segmentation"] = str(exc)
+        native_obstacle_tracker = callable(getattr(self.segmentation, "track_obstacles", None))
+        # EdgeTAM is the default. Keep YOLO completely unloaded until the GUI
+        # explicitly requests the retained YOLO pipeline, avoiding startup GPU
+        # contention and preserving the no-YOLO default path.
+        if self.obstacle_backend_mode == "yolo":
+            self._initialize_segmentation_backend()
 
         runtime_stream = _make_cuda_stream(self.config.device)
 
         handled_cloud_version = -1
+        handled_model_generation = 0
         reset_counter = self._reset_counter
         last_yolo_diagnostics_log = 0.0
+        last_obstacle_output_valid = False
+        last_published_obstacle_points = 0
+        switch_hold_updates = 0
+        last_relationship_had_obstacles = False
+        relationship_switch_hold_updates = 0
+        last_pipeline_mode = (
+            "yolo"
+            if _needs_yolo_pipeline(
+                self.obstacle_backend_mode,
+                self.active_obstacle_backend_mode,
+            )
+            else self.active_obstacle_backend_mode
+        )
         while not self._stop_event.is_set():
             with self._state_lock:
                 cloud = self._cloud
                 source_frame = self._cloud_source_frame
                 cloud_version = self._cloud_version
+            requested_pipeline_mode = self.obstacle_backend_mode
+            active_pipeline_mode = self.active_obstacle_backend_mode
+            needs_yolo_pipeline = _needs_yolo_pipeline(
+                requested_pipeline_mode,
+                active_pipeline_mode,
+            )
+            if (
+                needs_yolo_pipeline
+                and not self._models_ready["segmentation"]
+                and "segmentation" not in self._errors
+            ):
+                self._initialize_segmentation_backend()
+                native_obstacle_tracker = callable(
+                    getattr(self.segmentation, "track_obstacles", None)
+                )
+            if needs_yolo_pipeline:
+                handled_model_generation, model_switched = (
+                    self._apply_pending_segmentation_switch(
+                        handled_model_generation,
+                        preflight_frame=source_frame,
+                        require_tracking_preflight=True,
+                    )
+                )
+            else:
+                model_switched = False
+            if model_switched:
+                tracker_2d.reset()
+                tracker_3d.reset()
+                robot_self_filter = RobotSelfFilter(self.config.segmentation)
+                observation_cache.clear()
+                reset_tracking = getattr(self.segmentation, "reset_tracking", None)
+                if callable(reset_tracking):
+                    reset_tracking()
+                native_obstacle_tracker = callable(
+                    getattr(self.segmentation, "track_obstacles", None)
+                )
+                handled_cloud_version = -1
+                # Do not overwrite the last safe outputs with an artificial
+                # empty result while the new tracker earns confirmation hits.
+                # PointCloud2 keeps its old DDS sample/stamp; the relationship
+                # publisher naturally marks its retained state stale by age.
+                switch_hold_updates = (
+                    self.config.tracking.confirmation_hits
+                    if last_obstacle_output_valid
+                    else 0
+                )
+                relationship_switch_hold_updates = (
+                    self.config.tracking.confirmation_hits
+                    if last_relationship_had_obstacles
+                    else 0
+                )
             if cloud is None or source_frame is None or cloud_version == handled_cloud_version:
                 self._stop_event.wait(0.01)
+                continue
+            pipeline_mode = (
+                "yolo" if needs_yolo_pipeline else active_pipeline_mode
+            )
+            pipeline_mode_changed = pipeline_mode != last_pipeline_mode
+            if pipeline_mode_changed:
+                tracker_2d.reset()
+                tracker_3d.reset()
+                robot_self_filter.reset()
+                observation_cache.clear()
+                reset_tracking = getattr(self.segmentation, "reset_tracking", None)
+                if callable(reset_tracking):
+                    reset_tracking()
+                handled_cloud_version = -1
+                last_obstacle_output_valid = False
+                last_published_obstacle_points = 0
+                switch_hold_updates = 0
+                last_pipeline_mode = pipeline_mode
+                with self._state_lock:
+                    self._people_tracks = []
+                    self._people_detections = []
+                    self._robot_arm = None
+                    self._people_detection_frame = source_frame
+                    self._people_frame_index = cloud.frame_index
+                    self._people_cloud_version = cloud_version
+                    self._people_version += 1
+            if pipeline_mode != "yolo":
+                # Estimate only the anchored green arm center. This path does
+                # not invoke YOLO; native Edge tracks supply obstacle centers
+                # and velocities through the relationship bridge.
+                robot_arm = None
+                try:
+                    robot_self_filter.filter_obstacles([], source_frame)
+                    robot_arm = robot_self_filter.estimate_arm_state(
+                        source_frame,
+                        cloud,
+                    )
+                    relationship_robot_arm = robot_arm
+                    openarm_state = getattr(
+                        self.scene, "openarm_robot_state", None
+                    )
+                    if callable(openarm_state):
+                        relationship_robot_arm = (
+                            openarm_state(cloud.timestamp) or robot_arm
+                        )
+                    update_robot_arm = getattr(
+                        self.arm_obstacle_relationship_publisher,
+                        "update_robot_arm",
+                        None,
+                    )
+                    if callable(update_robot_arm):
+                        update_robot_arm(relationship_robot_arm)
+                    edge_frame = getattr(
+                        self.arm_obstacle_relationship_publisher,
+                        "latest_frame",
+                        None,
+                    )
+                    edge_tracks = []
+                    if (
+                        edge_frame is not None
+                        and abs(float(edge_frame.timestamp) - cloud.timestamp)
+                        <= 0.35
+                    ):
+                        edge_tracks = list(edge_frame.tracks)
+                    with self._state_lock:
+                        self._people_tracks = edge_tracks
+                        self._people_detections = []
+                        self._robot_arm = robot_arm
+                        self._people_detection_frame = source_frame
+                        self._people_frame_index = cloud.frame_index
+                        self._people_cloud_version = cloud_version
+                        self._people_version += 1
+                except Exception as exc:
+                    if "edge_relationship_runtime" not in self._errors:
+                        LOGGER.exception(
+                            "Edge arm-center/relationship update failed"
+                        )
+                    self._errors["edge_relationship_runtime"] = str(exc)
+                handled_cloud_version = cloud_version
+                if (
+                    pipeline_mode_changed
+                    and self.arm_obstacle_relationship_publisher is not None
+                ):
+                    try:
+                        self.arm_obstacle_relationship_publisher.publish(
+                            None,
+                            [],
+                            source_timestamp=cloud.timestamp,
+                        )
+                    except Exception as exc:
+                        LOGGER.warning(
+                            "Could not clear prior relationship output: %s",
+                            exc,
+                        )
+                self._stop_event.wait(0.005)
                 continue
             if reset_counter != self._reset_counter:
                 tracker_2d.reset()
@@ -977,6 +1895,11 @@ class RealtimePipeline:
                 if callable(reset_tracking):
                     reset_tracking()
                 handled_cloud_version = -1
+                last_obstacle_output_valid = False
+                last_published_obstacle_points = 0
+                switch_hold_updates = 0
+                last_relationship_had_obstacles = False
+                relationship_switch_hold_updates = 0
                 reset_counter = self._reset_counter
             try:
                 people_2d: list[Detection2D] = []
@@ -1008,8 +1931,19 @@ class RealtimePipeline:
                     # ByteTrack supplies low-confidence recovery masks, while
                     # this local timestamp-aware association keeps IDs stable
                     # if the backend resets or changes an external ID.
+                    # MediaPipe can propagate its previous mask with optical
+                    # flow for display continuity. Do not count that propagated
+                    # mask as a current semantic measurement: the local tracker
+                    # owns the bounded grey HOLD box, while the 3D cloud clears
+                    # immediately when the neural detector no longer sees a
+                    # hand.
+                    fresh_inference = [
+                        detection
+                        for detection in inference
+                        if not detection.is_prediction
+                    ]
                     measured_people = tracker_2d.update(
-                        inference,
+                        fresh_inference,
                         source_frame.source_timestamp,
                     )
                     held_people = tracker_2d.predict_missing(
@@ -1060,12 +1994,9 @@ class RealtimePipeline:
                     )
                     if self.yolo_obstacle_pointcloud_publisher is not None:
                         try:
-                            publish_observations = _observations_with_short_hold(
+                            publish_observations = _current_observations_with_fusion(
                                 observations,
-                                tracks,
                                 observation_cache,
-                                self.config.tracking.obstacle_cloud_hold_updates,
-                                cloud.timestamp,
                                 voxel_size=self.config.reconstruction.voxel_size,
                                 max_center_step_m=(
                                     self.config.tracking.obstacle_center_max_step_m
@@ -1076,19 +2007,57 @@ class RealtimePipeline:
                                 cloud,
                                 self.config.reconstruction.max_points,
                             )
-                            published_obstacle_points = len(obstacle_cloud.points)
-                            self.yolo_obstacle_pointcloud_publisher.publish(obstacle_cloud)
+                            (
+                                publish_obstacle_output,
+                                last_obstacle_output_valid,
+                                switch_hold_updates,
+                            ) = _model_switch_output_gate(
+                                obstacle_cloud.valid,
+                                last_obstacle_output_valid,
+                                switch_hold_updates,
+                            )
+                            if obstacle_cloud.valid:
+                                last_published_obstacle_points = len(
+                                    obstacle_cloud.points
+                                )
+                            elif publish_obstacle_output:
+                                last_published_obstacle_points = 0
+                            if publish_obstacle_output:
+                                self.yolo_obstacle_pointcloud_publisher.publish(
+                                    obstacle_cloud
+                                )
+                            published_obstacle_points = (
+                                last_published_obstacle_points
+                            )
                         except Exception as publish_exc:
                             if "yolo_obstacle_pointcloud_topic" not in self._errors:
                                 LOGGER.exception("YOLO obstacle point-cloud publication failed")
                                 self._errors["yolo_obstacle_pointcloud_topic"] = str(publish_exc)
                     if self.arm_obstacle_relationship_publisher is not None:
                         try:
-                            self.arm_obstacle_relationship_publisher.publish(
-                                robot_arm,
-                                relationship_tracks,
-                                source_timestamp=cloud.timestamp,
+                            (
+                                publish_relationship_output,
+                                last_relationship_had_obstacles,
+                                relationship_switch_hold_updates,
+                            ) = _model_switch_output_gate(
+                                bool(relationship_tracks),
+                                last_relationship_had_obstacles,
+                                relationship_switch_hold_updates,
                             )
+                            if publish_relationship_output:
+                                relationship_robot_arm = robot_arm
+                                openarm_state = getattr(
+                                    self.scene, "openarm_robot_state", None
+                                )
+                                if callable(openarm_state):
+                                    relationship_robot_arm = (
+                                        openarm_state(cloud.timestamp) or robot_arm
+                                    )
+                                self.arm_obstacle_relationship_publisher.publish(
+                                    relationship_robot_arm,
+                                    relationship_tracks,
+                                    source_timestamp=cloud.timestamp,
+                                )
                         except Exception as publish_exc:
                             if "arm_obstacle_relationship_topic" not in self._errors:
                                 LOGGER.exception(
@@ -1174,6 +2143,48 @@ class RealtimePipeline:
                                 "YOLO detections were confirmed but produced no valid 3D "
                                 "obstacle points; inspect the YOLO3D detection diagnostics above"
                             )
+                        update_backend = getattr(
+                            self.dashboard,
+                            "update_obstacle_backend_status",
+                            None,
+                        )
+                        if callable(update_backend):
+                            estimated_fps = (
+                                0.0
+                                if not self._segmentation_ms
+                                else min(
+                                    self.config.segmentation.frequency_hz,
+                                    1000.0 / self._segmentation_ms,
+                                )
+                            )
+                            update_backend(
+                                "yolo",
+                                state=(
+                                    "active"
+                                    if self.active_obstacle_backend_mode == "yolo"
+                                    else "loading"
+                                ),
+                                detail=(
+                                    "YOLO RGB masks fused with the aligned "
+                                    "high-resolution point cloud"
+                                ),
+                                metrics={
+                                    "yolo_model": self.active_segmentation_model,
+                                    "yolo_fps": f"{estimated_fps:.1f}",
+                                    "yolo_latency_ms": (
+                                        "--"
+                                        if self._segmentation_ms is None
+                                        else f"{self._segmentation_ms:.1f}"
+                                    ),
+                                    "track_count": str(len(tracks)),
+                                    "output_points": str(
+                                        published_obstacle_points
+                                    ),
+                                    "hand_only": str(
+                                        self.config.segmentation.hand_only
+                                    ).lower(),
+                                },
+                            )
                         last_yolo_diagnostics_log = diagnostic_now
                 else:
                     tracks = []
@@ -1209,7 +2220,8 @@ class RealtimePipeline:
                     self._people_frame_index = cloud.frame_index
                     self._people_cloud_version = cloud_version
                     self._people_version += 1
-        self.segmentation.close()
+        if self.segmentation is not None:
+            self._close_segmentation_backend(self.segmentation)
 
     def _safety_worker(self) -> None:
         maximum_depth = (
@@ -1269,7 +2281,14 @@ class RealtimePipeline:
                 self.config.scale_mode == "calibrated"
                 and (
                     self.config.manual_scale is not None
-                    or (cloud is not None and cloud.metric_scale is not None)
+                    or (
+                        cloud is not None
+                        and cloud.metric_scale is not None
+                        and (
+                            not self.config.reconstruction.apriltag_enabled
+                            or cloud.apriltag_locked
+                        )
+                    )
                 )
             )
             snapshot = decision.update(
@@ -1281,7 +2300,7 @@ class RealtimePipeline:
                 metric_valid=metric_valid,
                 depth_valid=cloud is not None and cloud.valid,
                 camera_motion_confidence=perception.camera_motion_confidence,
-                model_ready=self._models_ready["depth"] or self._models_ready["st4rtrack"],
+                model_ready=self.reconstruction_ready,
             )
             self.performance.tick("safety")
             self.performance.add_latency_ms((time.perf_counter() - perception.frame.capture_timestamp) * 1000.0)
@@ -1451,7 +2470,7 @@ class RealtimePipeline:
                         self.dashboard.update_reconstruction_status(
                             pipeline_snapshot.depth_mode,
                             gpu_info(self.config.device).name,
-                            self._models_ready["st4rtrack"] or self._models_ready["depth"],
+                            self.reconstruction_ready,
                             self.errors,
                             len(people_detections),
                             len(people),
@@ -1461,6 +2480,16 @@ class RealtimePipeline:
                             reference_depth_m=cloud.reference_depth_m if cloud is not None else None,
                             observed_reference_depth=(
                                 cloud.reference_observed_depth if cloud is not None else None
+                            ),
+                            apriltag_locked=(
+                                cloud.apriltag_locked if cloud is not None else False
+                            ),
+                            apriltag_id=cloud.apriltag_id if cloud is not None else None,
+                            apriltag_size_m=(
+                                cloud.apriltag_size_m if cloud is not None else None
+                            ),
+                            apriltag_age_frames=(
+                                cloud.apriltag_age_frames if cloud is not None else None
                             ),
                         )
                     else:
@@ -1523,8 +2552,7 @@ class RealtimePipeline:
             if status_due:
                 last_status_update = now
             reconstruction_unavailable = (
-                not self._models_ready["depth"]
-                and not self._models_ready["st4rtrack"]
+                not self.reconstruction_ready
                 and "depth" in self._errors
             )
             if self.config.mode == "reconstruction":

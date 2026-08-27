@@ -16,9 +16,16 @@ segmentation:
   fp16: true
 reconstruction:
   depth_mode: video_depth
+  depth_mode_options: [video_depth, mast3r_slam, st4rtrack, fast_depth]
   model: depth-anything/Depth-Anything-V2-Small-hf
   st4rtrack_path: third_party/St4RTrack
   video_depth_path: third_party/Video-Depth-Anything
+  mast3r_slam_path: third_party/MASt3R-SLAM
+  mast3r_slam_python: .venv-mast3r-slam/bin/python
+  mast3r_slam_config: third_party/MASt3R-SLAM/config/base.yaml
+  mast3r_slam_image_size: 512
+  mast3r_slam_confidence_threshold: 1.5
+  mast3r_slam_loop_closure: true
   input_size: 280
   frequency_hz: 12.0
   fast_depth_frequency_hz: 8.0

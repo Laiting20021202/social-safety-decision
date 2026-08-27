@@ -1,5 +1,7 @@
 name: koch_lan
 mode: reconstruction
+# The retained YOLO pipeline is idle unless selected in the GUI, but its
+# overlay and 3D worker remain available for runtime switching.
 people_overlay: true
 device: cuda
 scale_mode: calibrated
@@ -8,12 +10,21 @@ video:
   loop: false
   playback_speed: 1.0
 segmentation:
-  # YOLO26m's multi-scale mask prototype improves the points selected at person
-  # boundaries while remaining well below the depth-frame budget on this GPU.
+  # Retained as the second GUI-selectable obstacle pipeline. EdgeTAM remains
+  # the default and YOLO inference is gated off until explicitly selected.
+  # Every listed file is a generic 80-class COCO object-segmentation weight;
+  # none is a human-hand checkpoint. Never configure one as the semantic hand
+  # detector merely because COCO contains the unrelated `handbag` label.
   model: yolo26m-seg.pt
-  # 384 preserves small hands/partial people better than 320 on the RTX 4060
-  # while remaining within the 12 Hz perception budget.
-  input_size: 384
+  model_options:
+    - yolo26m-seg.pt
+    - yolo26s-seg.pt
+    - yolo11m-seg.pt
+    - yolo11s-seg.pt
+    - yolo11n-seg.pt
+  # The source is 320x240, so a 320 model input avoids upscaling work and lets
+  # the selectable path follow the faster 15 Hz point-cloud publication cap.
+  input_size: 320
   # New tracks need a strong detection; ByteTrack may use lower-confidence
   # detections only to continue an already established person ID.
   confidence: 0.50
@@ -22,6 +33,19 @@ segmentation:
   iou: 0.5
   frequency_hz: 12.0
   fp16: true
+  # Generic COCO YOLO has no hand class. In the selectable legacy path, admit
+  # only masks confirmed by the shared MediaPipe hand landmarker; the aligned
+  # depth map still supplies all 3D hand geometry.
+  hand_only: true
+  hand_maximum_hands: 4
+  hand_minimum_detection_confidence: 0.50
+  hand_minimum_tracking_confidence: 0.45
+  hand_model_complexity: 0
+  hand_mask_padding_px: 10
+  hand_temporal_hold_frames: 8
+  hand_temporal_confidence_decay: 0.94
+  hand_minimum_flow_points: 4
+  hand_maximum_flow_error: 30.0
   # The Koch arm enters from the top-centre of this fixed camera. Follow only
   # the anchored green robot links and remove them from person masks; a real
   # hand beside/on the arm remains because the whole centre ROI is not hidden.
@@ -39,11 +63,37 @@ segmentation:
   robot_min_residual_pixels: 80
   robot_center_ema_alpha: 0.22
   robot_center_hold_frames: 12
+  # Legacy RGB fallback used only when URDF FK is unavailable. Metric depth is
+  # independently calibrated by the 8 cm AprilTag below.
+  robot_fixed_center_xyz: [0.0, 0.40, 0.0]
+  robot_fixed_center_xy: [0.535, 0.52]
+  robot_fixed_center_confidence: 0.55
+  robot_prefer_fixed_center: true
+obstacle_perception:
+  # UI choices are pipeline modes, not interchangeable YOLO checkpoints.
+  # EdgeTAM remains optional refinement; the 3D point-cloud tracker is always
+  # active and never clears obstacles when RGB/model inference is unavailable.
+  enabled: true
+  backend: edgetam
+  backend_options: [edgetam, yolo]
+  diagnostics_topic: /edgetam_tracker/diagnostics
+  tracked_obstacles_topic: /edgetam_tracker/obstacles
+  obstacle_cloud_topic: /realtime_safety/yolo_obstacles/pointcloud
+  edgetam_obstacle_cloud_topic: /edgetam_tracker/obstacle_cloud
+  yolo_obstacle_cloud_topic: /realtime_safety/yolo_obstacles/candidate_cloud
+  control_service: /edgetam_tracker/set_enabled
 reconstruction:
   depth_mode: video_depth
+  depth_mode_options: [video_depth, mast3r_slam, st4rtrack, fast_depth]
   model: depth-anything/Depth-Anything-V2-Small-hf
   st4rtrack_path: third_party/St4RTrack
   video_depth_path: third_party/Video-Depth-Anything
+  mast3r_slam_path: third_party/MASt3R-SLAM
+  mast3r_slam_python: .venv-mast3r-slam/bin/python
+  mast3r_slam_config: third_party/MASt3R-SLAM/config/base.yaml
+  mast3r_slam_image_size: 512
+  mast3r_slam_confidence_threshold: 1.5
+  mast3r_slam_loop_closure: true
   # Restore the original pre-metric-calibration pinhole projection. The camera
   # publishes no calibrated CameraInfo (K is all zeros), so this remains a
   # fallback until a checkerboard calibration is available.
@@ -51,18 +101,30 @@ reconstruction:
   focal_length_y: 272.0
   principal_point_x: 159.5
   principal_point_y: 119.5
-  # The centered gripper is rigidly mounted 0.40 m from the webcam. The ROI is
-  # normalized [x_min, y_min, x_max, y_max] in the incoming camera image.
-  metric_reference_depth_m: 0.40
+  # Metric scale now comes from the measured four sides and two diagonals of
+  # the 8 x 8 cm AprilTag, rather than an assumed single-pixel depth ROI.
+  metric_reference_depth_m: null
+  # Retained only as an optional legacy fallback; inactive while
+  # metric_reference_depth_m is null.
   metric_reference_roi: [0.46, 0.34, 0.61, 0.70]
   metric_reference_percentile: 20.0
   metric_reference_warmup_frames: 8
-  # The camera/reference mount is rigid. Freeze the robust scale after warmup
-  # so foreground motion cannot make the whole reconstructed room "breathe".
-  metric_reference_ema_alpha: 0.0
-  input_size: 252
-  frequency_hz: 12.0
-  fast_depth_frequency_hz: 12.0
+  metric_reference_ema_alpha: 0.04
+  apriltag_enabled: true
+  apriltag_dictionary: DICT_APRILTAG_36h11
+  apriltag_id: null
+  apriltag_size_m: 0.08
+  apriltag_detection_interval: 2
+  apriltag_warmup_detections: 5
+  apriltag_scale_ema_alpha: 0.12
+  apriltag_hold_frames: 45
+  apriltag_max_ratio_spread: 0.25
+  input_size: 224
+  # A 9 Hz target leaves a small scheduling margin around the measured
+  # 95–105 ms inference time, producing regular frames instead of continuous
+  # full-load bursts that fluctuate between 8 and 11 Hz.
+  frequency_hz: 9.0
+  fast_depth_frequency_hz: 9.0
   max_points: 8000
   voxel_size: 0.01
   confidence_threshold: 0.0
@@ -74,13 +136,16 @@ reconstruction:
   anchor_interval: 0
   fp16: true
 tracking:
-  max_missing: 24
-  visual_hold_updates: 8
-  obstacle_cloud_hold_updates: 12
-  confirmation_hits: 3
-  bbox_smoothing_alpha: 0.42
-  obstacle_center_max_step_m: 0.15
-  iou_threshold: 0.2
+  max_missing: 36
+  # Keep GUI-only predictions very short. Controller relationship tracks keep
+  # their longer conservative hold below, but stale boxes should not linger at
+  # the image boundary after a hand leaves the scene.
+  visual_hold_updates: 2
+  obstacle_cloud_hold_updates: 18
+  confirmation_hits: 2
+  bbox_smoothing_alpha: 0.58
+  obstacle_center_max_step_m: 0.20
+  iou_threshold: 0.10
   association_distance: 1.5
   dynamic_enter_speed: 0.15
   dynamic_exit_speed: 0.08
@@ -102,7 +167,37 @@ gui:
   port: 8080
   presentation_mode: true
   max_video_width: 320
-  video_fps: 20.0
+  video_fps: 15.0
   point_size: 0.0035
   history_frames: 1
   history_stride: 1
+  # Display-only mount correction; tune these three values in Camera Geometry.
+  # The top-down button changes only the browser viewpoint, not ROS geometry.
+  view_pitch_down_deg: 0.0
+  view_roll_deg: 0.0
+  view_yaw_deg: 0.0
+  # Estimate the tabletop plane and show a separate orthographic metric BEV.
+  # The camera-frame cloud and controller-facing ROS coordinates stay intact.
+  metric_bev_enabled: true
+  metric_bev_obstacle_height_m: 0.035
+openarm:
+  enabled: true
+  # Official v1.0 bimanual xacro: central body, left arm, right arm and both
+  # grippers.  JointState names retain their left/right prefixes.
+  model: openarm_v1.0_bimanual
+  description_path: third_party/openarm_description
+  urdf_path: third_party/openarm_description/generated/openarm_v10_bimanual.urdf
+  joint_states_topic: /joint_states
+  # The AprilTag is the live origin. Place the body center on the requested red
+  # point: centered in x and exactly 0.50 m below the tag along work-plane y.
+  base_anchor: apriltag
+  base_from_apriltag_xyz: [0.0, -0.50, 0.0]
+  base_position_xyz: [0.0, -0.50, 0.0]
+  # Bird's-eye view: turn the whole body counter-clockwise so both arms face
+  # the AprilTag/work area rather than pointing to screen-right.
+  base_rpy_deg: [0.0, 0.0, 90.0]
+  stale_after_s: 0.75
+  show_visual: true
+  show_collision: false
+  camera_height_m: 0.50
+  camera_downward_angle_deg: 36.0

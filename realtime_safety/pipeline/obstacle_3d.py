@@ -64,7 +64,7 @@ class ObstacleExtractor3D:
             mask = self._mask_for_detection(detection, width, height)
             assignment_mask = mask
             mask_pixels = int(mask.sum())
-            if detection.class_name == "person" and int(mask.sum()) >= 80:
+            if detection.class_name in {"person", "hand", "human_hand"} and int(mask.sum()) >= 80:
                 # Trim mixed foreground/background boundary pixels before
                 # reading the St4RTrack pointmap.
                 mask = cv2.erode(mask.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=1).astype(bool)
@@ -91,11 +91,12 @@ class ObstacleExtractor3D:
                     )
                 )
                 continue
-            points = (
-                self._robust_filter_person(points)
-                if detection.class_name == "person"
-                else self._robust_filter(points)
-            )
+            if detection.class_name == "person":
+                points = self._robust_filter_person(points)
+            elif detection.class_name in {"hand", "human_hand"}:
+                points = self._robust_filter_hand(points)
+            else:
+                points = self._robust_filter(points)
             filtered_points = len(points)
             if len(points) < self.minimum_points:
                 diagnostics.append(
@@ -245,6 +246,58 @@ class ObstacleExtractor3D:
         span = np.maximum(upper - lower, 0.02)
         inside = np.all((points >= lower - 0.25 * span) & (points <= upper + 0.25 * span), axis=1)
         return points[inside]
+
+    def _robust_filter_hand(self, points: np.ndarray) -> np.ndarray:
+        """Keep the nearest dense RGB-D layer inside a hand mask.
+
+        A hand is above the table and therefore closer to the camera.  Using
+        the median depth of the complete segmentation mask selects the table
+        whenever mask edges/background outnumber hand pixels.  Find the first
+        sufficiently populated depth layer instead, then trim its spatial
+        outliers.  Isolated near-depth noise cannot satisfy the population
+        gate.
+        """
+        if len(points) < self.minimum_points:
+            return points
+
+        forward = points[:, 1]
+        order = np.argsort(forward)
+        sorted_forward = forward[order]
+        minimum_layer_points = max(
+            self.minimum_points,
+            int(np.ceil(0.06 * len(sorted_forward))),
+        )
+        window_m = 0.10
+        layer_start: float | None = None
+        layer_end: float | None = None
+        for start_index, start_depth in enumerate(sorted_forward):
+            end_index = int(
+                np.searchsorted(sorted_forward, start_depth + window_m, side="right")
+            )
+            if end_index - start_index >= minimum_layer_points:
+                layer_start = float(start_depth)
+                # Include the full hand surface while retaining a clear gap
+                # to the table/background behind it.
+                layer_end = float(start_depth + 0.14)
+                break
+
+        if layer_start is None or layer_end is None:
+            return self._robust_filter(points)
+
+        selected = points[(forward >= layer_start - 0.01) & (forward <= layer_end)]
+        if len(selected) < self.minimum_points:
+            return self._robust_filter(points)
+        selected = self._robust_filter(selected)
+        if len(selected) < self.minimum_points:
+            return selected
+        lower, upper = np.percentile(selected, (2.0, 98.0), axis=0)
+        span = np.maximum(upper - lower, 0.015)
+        inside = np.all(
+            (selected >= lower - 0.15 * span)
+            & (selected <= upper + 0.15 * span),
+            axis=1,
+        )
+        return selected[inside]
 
     @staticmethod
     def _observation(track_id: int, class_name: str, confidence: float, points: np.ndarray, timestamp: float) -> ObstacleObservation3D:

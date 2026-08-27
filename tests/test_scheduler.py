@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -11,8 +12,10 @@ from realtime_safety.config import load_config
 from realtime_safety.pipeline.pointcloud import depth_to_pointmap
 from realtime_safety.scheduler import (
     RealtimePipeline,
+    _model_switch_output_gate,
+    _needs_yolo_pipeline,
     _observation_pointcloud,
-    _observations_with_short_hold,
+    _current_observations_with_fusion,
 )
 from realtime_safety.types import (
     BBox3D,
@@ -22,6 +25,14 @@ from realtime_safety.types import (
     PointCloudFrame,
     Track3DState,
 )
+from realtime_safety.utils.validation import validate_config
+
+
+def test_yolo_worker_runs_for_both_sides_of_pending_handoff() -> None:
+    assert not _needs_yolo_pipeline("edgetam", "edgetam")
+    assert _needs_yolo_pipeline("yolo", "edgetam")
+    assert _needs_yolo_pipeline("edgetam", "yolo")
+    assert _needs_yolo_pipeline("yolo", "yolo")
 
 
 class FastSegmentation:
@@ -57,6 +68,113 @@ class ForbiddenSegmentation(FastSegmentation):
         raise AssertionError("YOLO must not load in reconstruction-only mode")
 
 
+class RecordingSegmentation(FastSegmentation):
+    def __init__(
+        self,
+        model: str,
+        events: list[tuple[str, str]],
+        *,
+        load_gate: threading.Event | None = None,
+        load_error: Exception | None = None,
+    ) -> None:
+        self.model = model
+        self.events = events
+        self.load_gate = load_gate
+        self.load_error = load_error
+        self.closed = False
+
+    def load(self) -> None:
+        self.events.append(("load", self.model))
+        if self.load_gate is not None:
+            self.load_gate.wait(timeout=2.0)
+        if self.load_error is not None:
+            raise self.load_error
+
+    def warmup(self) -> None:
+        self.events.append(("warmup", self.model))
+
+    def close(self) -> None:
+        self.closed = True
+        self.events.append(("close", self.model))
+
+
+class RecordingModelDashboard:
+    def __init__(self) -> None:
+        self.statuses: list[dict[str, object]] = []
+
+    def update_obstacle_model_status(
+        self,
+        active_model: str,
+        *,
+        requested_model: str | None = None,
+        error: str | None = None,
+        ready: bool = True,
+        generation: int | None = None,
+    ) -> None:
+        self.statuses.append(
+            {
+                "active": active_model,
+                "requested": requested_model,
+                "error": error,
+                "ready": ready,
+            }
+        )
+
+
+class RecordingReconstructionDashboard:
+    def __init__(self) -> None:
+        self.statuses: list[dict[str, object]] = []
+
+    def update_reconstruction_method_status(
+        self,
+        active_method: str,
+        *,
+        requested_method: str | None = None,
+        error: str | None = None,
+        ready: bool = True,
+    ) -> None:
+        self.statuses.append(
+            {
+                "active": active_method,
+                "requested": requested_method,
+                "error": error,
+                "ready": ready,
+            }
+        )
+
+
+class AvailableMast3rSlam:
+    def __init__(self) -> None:
+        self.preflight_calls = 0
+
+    def preflight(self) -> None:
+        self.preflight_calls += 1
+
+    def close(self) -> None:
+        pass
+
+
+def _switchable_pipeline(
+    factory,
+) -> tuple[RealtimePipeline, RecordingSegmentation, RecordingModelDashboard]:
+    config = load_config("realtime_fast")
+    config.device = "cpu"
+    config.segmentation.model = "model-a.pt"
+    config.segmentation.model_options = ["model-a.pt", "model-b.pt", "model-c.pt"]
+    events: list[tuple[str, str]] = []
+    current = RecordingSegmentation("model-a.pt", events)
+    dashboard = RecordingModelDashboard()
+    pipeline = RealtimePipeline(
+        config,
+        segmentation_backend=current,
+        depth_backend=SlowDepth(0.0),
+        dashboard=dashboard,
+        segmentation_factory=factory,
+    )
+    pipeline._models_ready["segmentation"] = True
+    return pipeline, current, dashboard
+
+
 class SlowDepth:
     def __init__(self, delay: float = 0.08) -> None:
         self.delay = delay
@@ -84,6 +202,60 @@ class SlowDepth:
             "test_depth",
             dense_confidence=np.ones((48, 64), dtype=np.float32),
         )
+
+
+def test_reconstruction_method_switch_is_allowlisted_and_nonblocking() -> None:
+    config = load_config("st4rtrack_viewer")
+    config.device = "cpu"
+    config.reconstruction.depth_mode = "fast_depth"
+    config.reconstruction.depth_mode_options = ["fast_depth", "mast3r_slam"]
+    dashboard = RecordingReconstructionDashboard()
+    mast3r_slam = AvailableMast3rSlam()
+    pipeline = RealtimePipeline(
+        config,
+        depth_backend=SlowDepth(0.0),
+        dashboard=dashboard,
+        mast3r_slam_backend=mast3r_slam,
+    )
+    pipeline._models_ready["depth"] = True
+
+    started = time.perf_counter()
+    accepted = pipeline.request_reconstruction_method("mast3r_slam")
+
+    assert accepted
+    assert time.perf_counter() - started < 0.05
+    assert mast3r_slam.preflight_calls == 1
+    assert pipeline.reconstruction_mode == "mast3r_slam"
+    assert pipeline.active_reconstruction_mode == "fast_depth"
+    assert dashboard.statuses[-1] == {
+        "active": "fast_depth",
+        "requested": "mast3r_slam",
+        "error": None,
+        "ready": True,
+    }
+
+
+def test_missing_mast3r_slam_does_not_change_active_method(tmp_path: Path) -> None:
+    config = load_config("st4rtrack_viewer")
+    config.device = "cpu"
+    config.reconstruction.depth_mode = "fast_depth"
+    config.reconstruction.depth_mode_options = ["fast_depth", "mast3r_slam"]
+    config.reconstruction.mast3r_slam_path = str(tmp_path / "missing")
+    config.reconstruction.mast3r_slam_python = str(tmp_path / "missing-python")
+    dashboard = RecordingReconstructionDashboard()
+    pipeline = RealtimePipeline(
+        config,
+        depth_backend=SlowDepth(0.0),
+        dashboard=dashboard,
+    )
+    pipeline._models_ready["depth"] = True
+
+    accepted = pipeline.request_reconstruction_method("mast3r_slam")
+
+    assert not accepted
+    assert pipeline.reconstruction_mode == "fast_depth"
+    assert pipeline.active_reconstruction_mode == "fast_depth"
+    assert "setup_mast3r_slam.sh" in str(dashboard.statuses[-1]["error"])
 
 
 class RecordingReconstructionScene:
@@ -209,6 +381,344 @@ def test_camera_fov_command_updates_projection_without_depth_scale_change() -> N
     assert config.reconstruction.metric_reference_depth_m == target_depth
 
 
+def test_metric_bev_commands_do_not_change_projection_intrinsics() -> None:
+    config = load_config("koch_lan")
+    config.device = "cpu"
+    pipeline = RealtimePipeline(
+        config,
+        segmentation_backend=ForbiddenSegmentation(),
+        depth_backend=SlowDepth(0.0),
+    )
+    calls: list[tuple[object, ...]] = []
+    pipeline.scene = SimpleNamespace(
+        set_metric_bev_enabled=lambda enabled: calls.append(("enabled", enabled)),
+        set_metric_bev_height_threshold=lambda value: calls.append(("height", value)),
+        recalibrate_metric_bev=lambda: calls.append(("recalibrate",)),
+    )
+    focal_x = config.reconstruction.focal_length_x
+    focal_y = config.reconstruction.focal_length_y
+
+    pipeline.handle_command("camera_bev_enabled", True)
+    pipeline.handle_command("camera_bev_height", 0.055)
+    pipeline.handle_command("camera_bev_recalibrate")
+
+    assert calls == [("enabled", True), ("height", 0.055), ("recalibrate",)]
+    assert config.gui.metric_bev_enabled
+    assert config.gui.metric_bev_obstacle_height_m == 0.055
+    assert config.reconstruction.focal_length_x == focal_x
+    assert config.reconstruction.focal_length_y == focal_y
+
+
+def test_koch_profile_preserves_yolo_choices_and_uses_private_mux_topics() -> None:
+    config = load_config("koch_lan")
+
+    validate_config(config)
+
+    assert config.people_overlay
+    assert config.segmentation.model == "yolo26m-seg.pt"
+    assert config.segmentation.model_options == [
+        "yolo26m-seg.pt",
+        "yolo26s-seg.pt",
+        "yolo11m-seg.pt",
+        "yolo11s-seg.pt",
+        "yolo11n-seg.pt",
+    ]
+    assert all(
+        not model.startswith(("http://", "https://"))
+        and Path(model).name == model
+        for model in config.segmentation.model_options
+    )
+    assert config.obstacle_perception.enabled
+    assert config.obstacle_perception.backend == "edgetam"
+    assert config.obstacle_perception.backend_options == [
+        "edgetam",
+        "yolo",
+    ]
+    candidate_and_output_topics = {
+        config.obstacle_perception.edgetam_obstacle_cloud_topic,
+        config.obstacle_perception.yolo_obstacle_cloud_topic,
+        config.obstacle_perception.obstacle_cloud_topic,
+    }
+    assert candidate_and_output_topics == {
+        "/edgetam_tracker/obstacle_cloud",
+        "/realtime_safety/yolo_obstacles/candidate_cloud",
+        "/realtime_safety/yolo_obstacles/pointcloud",
+    }
+
+
+def test_obstacle_backend_command_switches_mux_and_edge_controller_without_loading_model() -> None:
+    class Recorder:
+        def __init__(self) -> None:
+            self.requests: list[str] = []
+
+        def request_mode(self, mode: str) -> None:
+            self.requests.append(mode)
+
+    class NeverLoadedSegmentation(FastSegmentation):
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def load(self) -> None:
+            self.calls.append("load")
+
+        def warmup(self) -> None:
+            self.calls.append("warmup")
+
+        def infer(self, frame: FramePacket) -> list[Detection2D]:
+            self.calls.append("infer")
+            return super().infer(frame)
+
+    config = load_config("koch_lan")
+    config.device = "cpu"
+    controller = Recorder()
+    mux = Recorder()
+    segmentation = NeverLoadedSegmentation()
+    pipeline = RealtimePipeline(
+        config,
+        segmentation_backend=segmentation,
+        depth_backend=SlowDepth(0.0),
+        obstacle_backend_controller=controller,
+        obstacle_cloud_mux=mux,
+    )
+
+    pipeline.handle_command("obstacle_backend", "yolo")
+
+    assert pipeline.obstacle_backend_mode == "yolo"
+    assert pipeline.active_obstacle_backend_mode == "edgetam"
+    assert mux.requests == ["yolo"]
+    # EdgeTAM refinement is disabled, but its geometric cloud remains the
+    # live source until the mux receives YOLO's first candidate cloud.
+    assert controller.requests == ["pointcloud"]
+
+    pipeline.update_obstacle_mux_status(
+        SimpleNamespace(active_mode="yolo", state="active", message="ready")
+    )
+    assert pipeline.active_obstacle_backend_mode == "yolo"
+
+    pipeline.handle_command("obstacle_backend", "edgetam")
+
+    assert pipeline.obstacle_backend_mode == "edgetam"
+    assert pipeline.active_obstacle_backend_mode == "yolo"
+    assert mux.requests == ["yolo", "edgetam"]
+    assert controller.requests == ["pointcloud", "edgetam"]
+
+    pipeline.update_obstacle_mux_status(
+        SimpleNamespace(active_mode="edgetam", state="active", message="ready")
+    )
+
+    assert pipeline.active_obstacle_backend_mode == "edgetam"
+    assert pipeline.segmentation is segmentation
+    assert segmentation.calls == []
+
+
+def test_allowlisted_but_missing_local_model_is_rejected(tmp_path: Path) -> None:
+    current_model = tmp_path / "model-a.pt"
+    current_model.write_bytes(b"test checkpoint")
+    missing_model = tmp_path / "missing.pt"
+    config = load_config("realtime_fast")
+    config.device = "cpu"
+    config.segmentation.model = str(current_model)
+    config.segmentation.model_options = [str(current_model), str(missing_model)]
+    pipeline = RealtimePipeline(
+        config,
+        segmentation_backend=FastSegmentation(),
+        depth_backend=SlowDepth(0.0),
+    )
+    pipeline._models_ready["segmentation"] = True
+
+    assert not pipeline.request_segmentation_model(str(missing_model))
+    assert pipeline.active_segmentation_model == str(current_model)
+
+
+def test_segmentation_model_switch_is_queued_then_atomically_applied() -> None:
+    created: dict[str, RecordingSegmentation] = {}
+
+    def factory(config, _device: str) -> RecordingSegmentation:
+        backend = RecordingSegmentation(config.model, [])
+        created[config.model] = backend
+        return backend
+
+    pipeline, previous, dashboard = _switchable_pipeline(factory)
+
+    started = time.perf_counter()
+    pipeline.handle_command("segmentation_model", "model-b.pt")
+    callback_elapsed = time.perf_counter() - started
+
+    assert callback_elapsed < 0.05
+    assert created == {}
+    assert pipeline.segmentation is previous
+    generation, switched = pipeline._apply_pending_segmentation_switch(0)
+
+    assert generation == 1
+    assert switched
+    assert pipeline.active_segmentation_model == "model-b.pt"
+    assert pipeline.config.segmentation.model == "model-b.pt"
+    assert pipeline.segmentation is created["model-b.pt"]
+    assert created["model-b.pt"].events == [
+        ("load", "model-b.pt"),
+        ("warmup", "model-b.pt"),
+    ]
+    assert previous.closed
+    assert dashboard.statuses[0]["requested"] == "model-b.pt"
+    assert dashboard.statuses[-1] == {
+        "active": "model-b.pt",
+        "requested": None,
+        "error": None,
+        "ready": True,
+    }
+
+
+def test_failed_segmentation_model_switch_keeps_previous_backend() -> None:
+    created: dict[str, RecordingSegmentation] = {}
+
+    def factory(config, _device: str) -> RecordingSegmentation:
+        backend = RecordingSegmentation(
+            config.model,
+            [],
+            load_error=RuntimeError("checkpoint is incompatible"),
+        )
+        created[config.model] = backend
+        return backend
+
+    pipeline, previous, dashboard = _switchable_pipeline(factory)
+    pipeline.handle_command("segmentation_model", "model-b.pt")
+
+    generation, switched = pipeline._apply_pending_segmentation_switch(0)
+
+    assert generation == 1
+    assert not switched
+    assert pipeline.segmentation is previous
+    assert pipeline.active_segmentation_model == "model-a.pt"
+    assert pipeline.config.segmentation.model == "model-a.pt"
+    assert not previous.closed
+    assert created["model-b.pt"].closed
+    assert pipeline.errors["segmentation_switch"] == "checkpoint is incompatible"
+    assert dashboard.statuses[-1]["active"] == "model-a.pt"
+    assert dashboard.statuses[-1]["error"] == "checkpoint is incompatible"
+
+
+def test_unapproved_segmentation_model_requests_never_reach_factory() -> None:
+    factory_calls: list[str] = []
+
+    def factory(config, _device: str) -> RecordingSegmentation:
+        factory_calls.append(config.model)
+        return RecordingSegmentation(config.model, [])
+
+    pipeline, previous, dashboard = _switchable_pipeline(factory)
+
+    assert not pipeline.request_segmentation_model("../outside.pt")
+    assert not pipeline.request_segmentation_model("https://example.com/model.pt")
+    generation, switched = pipeline._apply_pending_segmentation_switch(0)
+
+    assert (generation, switched) == (0, False)
+    assert factory_calls == []
+    assert pipeline.segmentation is previous
+    assert dashboard.statuses[-1]["error"] is not None
+
+
+def test_latest_segmentation_model_request_wins_during_slow_load() -> None:
+    load_gate = threading.Event()
+    created: dict[str, RecordingSegmentation] = {}
+
+    def factory(config, _device: str) -> RecordingSegmentation:
+        backend = RecordingSegmentation(
+            config.model,
+            [],
+            load_gate=load_gate if config.model == "model-b.pt" else None,
+        )
+        created[config.model] = backend
+        return backend
+
+    pipeline, previous, _dashboard = _switchable_pipeline(factory)
+    pipeline.handle_command("segmentation_model", "model-b.pt")
+    results: list[tuple[int, bool]] = []
+    switch_thread = threading.Thread(
+        target=lambda: results.append(pipeline._apply_pending_segmentation_switch(0))
+    )
+    switch_thread.start()
+    deadline = time.perf_counter() + 1.0
+    while "model-b.pt" not in created and time.perf_counter() < deadline:
+        time.sleep(0.005)
+
+    pipeline.handle_command("segmentation_model", "model-c.pt")
+    load_gate.set()
+    switch_thread.join(timeout=2.0)
+
+    assert results == [(1, False)]
+    assert created["model-b.pt"].closed
+    assert pipeline.segmentation is previous
+
+    generation, switched = pipeline._apply_pending_segmentation_switch(1)
+
+    assert (generation, switched) == (2, True)
+    assert pipeline.segmentation is created["model-c.pt"]
+    assert pipeline.active_segmentation_model == "model-c.pt"
+    assert previous.closed
+
+
+def test_tracking_preflight_failure_rolls_back_candidate_model() -> None:
+    created: dict[str, RecordingSegmentation] = {}
+
+    class BrokenTrackingSegmentation(RecordingSegmentation):
+        def track_obstacles(self, _frame: FramePacket) -> list[Detection2D]:
+            self.events.append(("track", self.model))
+            raise RuntimeError("tracker configuration is invalid")
+
+    def factory(config, _device: str) -> RecordingSegmentation:
+        backend = BrokenTrackingSegmentation(config.model, [])
+        created[config.model] = backend
+        return backend
+
+    pipeline, previous, dashboard = _switchable_pipeline(factory)
+    pipeline.handle_command("segmentation_model", "model-b.pt")
+    bgr = np.zeros((16, 16, 3), dtype=np.uint8)
+    frame = FramePacket(1, 0.1, time.perf_counter(), bgr, bgr[..., ::-1], 30.0, 16, 16)
+
+    generation, switched = pipeline._apply_pending_segmentation_switch(
+        0,
+        preflight_frame=frame,
+        require_tracking_preflight=True,
+    )
+
+    assert (generation, switched) == (1, False)
+    assert pipeline.segmentation is previous
+    assert pipeline.active_segmentation_model == "model-a.pt"
+    assert not previous.closed
+    assert created["model-b.pt"].closed
+    assert ("warmup", "model-b.pt") in created["model-b.pt"].events
+    assert ("track", "model-b.pt") in created["model-b.pt"].events
+    assert dashboard.statuses[-1]["error"] == "tracker configuration is invalid"
+
+
+def test_model_switch_output_gate_retains_then_honestly_clears_previous_output() -> None:
+    publish, previous_valid, remaining = _model_switch_output_gate(
+        current_valid=False,
+        previous_valid=True,
+        hold_updates=2,
+    )
+    assert not publish
+    assert previous_valid
+    assert remaining == 1
+
+    publish, previous_valid, remaining = _model_switch_output_gate(
+        current_valid=False,
+        previous_valid=previous_valid,
+        hold_updates=remaining,
+    )
+    assert not publish
+    assert previous_valid
+    assert remaining == 0
+
+    publish, previous_valid, remaining = _model_switch_output_gate(
+        current_valid=False,
+        previous_valid=previous_valid,
+        hold_updates=remaining,
+    )
+    assert publish
+    assert not previous_valid
+    assert remaining == 0
+
+
 def test_yolo_observations_become_a_bounded_color_coded_cloud() -> None:
     source = SlowDepth(0.0).infer(
         FramePacket(
@@ -280,7 +790,7 @@ def test_empty_yolo_observations_produce_an_empty_frame() -> None:
     assert not result.valid
 
 
-def test_person_obstacle_cloud_is_held_briefly_during_a_tracking_miss() -> None:
+def test_person_obstacle_cloud_clears_immediately_during_a_tracking_miss() -> None:
     points = np.array(((0.0, 0.4, 0.0), (0.1, 0.4, 0.0)), dtype=np.float32)
     observation = ObstacleObservation3D(
         track_id=7,
@@ -294,44 +804,16 @@ def test_person_obstacle_cloud_is_held_briefly_during_a_tracking_miss() -> None:
         points=points,
     )
     cache: dict[int, ObstacleObservation3D] = {}
-    measured_track = Track3DState(
-        track_id=7,
-        class_name="person",
-        position_xyz=observation.position_xyz.copy(),
-        velocity_xyz=np.zeros(3, dtype=np.float32),
-        acceleration_xyz=np.zeros(3, dtype=np.float32),
-        covariance=np.eye(6),
-        bbox3d=observation.bbox3d,
-        radius=0.1,
-        hit_count=2,
-        missing_count=0,
-        last_timestamp=1.0,
-        motion_state="static",
-        confidence=0.9,
+    measured = _current_observations_with_fusion(
+        [observation], cache
     )
-    _observations_with_short_hold([observation], [measured_track], cache, 2, 1.0)
-    predicted_track = Track3DState(
-        track_id=7,
-        class_name="person",
-        position_xyz=observation.position_xyz + np.array((0.05, 0.0, 0.0), np.float32),
-        velocity_xyz=np.array((0.5, 0.0, 0.0), dtype=np.float32),
-        acceleration_xyz=np.zeros(3, dtype=np.float32),
-        covariance=np.eye(6),
-        bbox3d=observation.bbox3d,
-        radius=0.1,
-        hit_count=2,
-        missing_count=1,
-        last_timestamp=1.0,
-        motion_state="dynamic",
-        confidence=0.9,
-    )
+    assert len(measured) == 1
+    assert 7 in cache
 
-    held = _observations_with_short_hold([], [predicted_track], cache, 2, 1.1)
+    held = _current_observations_with_fusion([], cache)
 
-    assert len(held) == 1
-    assert held[0].track_id == 7
-    assert np.allclose(held[0].points, points + np.array((0.05, 0.0, 0.0)))
-    assert held[0].confidence < observation.confidence
+    assert held == []
+    assert cache == {}
 
 
 def test_person_obstacle_cloud_fills_transient_measurement_holes() -> None:
@@ -360,28 +842,9 @@ def test_person_obstacle_cloud_fills_transient_measurement_holes() -> None:
     first = observation(first_points, 1.0)
     second = observation(second_points, 1.1)
     cache: dict[int, ObstacleObservation3D] = {9: first}
-    track = Track3DState(
-        track_id=9,
-        class_name="person",
-        position_xyz=second.position_xyz,
-        velocity_xyz=np.zeros(3, dtype=np.float32),
-        acceleration_xyz=np.zeros(3, dtype=np.float32),
-        covariance=np.eye(6),
-        bbox3d=second.bbox3d,
-        radius=0.1,
-        hit_count=3,
-        missing_count=0,
-        last_timestamp=1.1,
-        motion_state="static",
-        confidence=0.9,
-    )
-
-    fused = _observations_with_short_hold(
+    fused = _current_observations_with_fusion(
         [second],
-        [track],
         cache,
-        max_missing=12,
-        timestamp=1.1,
         voxel_size=0.005,
     )
 

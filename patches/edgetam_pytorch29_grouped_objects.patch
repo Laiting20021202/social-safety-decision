@@ -1,0 +1,17 @@
+diff --git a/sam2/modeling/perceiver.py b/sam2/modeling/perceiver.py
+index 3070935..cb36a6f 100644
+--- a/sam2/modeling/perceiver.py
++++ b/sam2/modeling/perceiver.py
+@@ -295,7 +295,11 @@ class PerceiverResampler(nn.Module):
+     def forward_2d(self, x):
+         B, C, H, W = x.shape
+ 
+-        latents_2d = self.latents_2d.unsqueeze(0).expand(B, -1, -1).view(-1, 1, C)
++        # ``expand`` returns a zero-stride, non-contiguous tensor when B > 1.
++        # PyTorch 2.9 correctly rejects viewing that storage directly. Reshape
++        # materializes only when required and keeps the grouped multi-object
++        # path on one predictor state instead of forcing one pass per object.
++        latents_2d = self.latents_2d.unsqueeze(0).expand(B, -1, -1).reshape(-1, 1, C)
+ 
+         num_window = int(math.sqrt(self.num_latents_2d))
+         window_size = H // num_window

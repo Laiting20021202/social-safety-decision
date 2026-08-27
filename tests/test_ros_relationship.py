@@ -85,6 +85,45 @@ def test_relationship_payload_explicitly_reports_no_arm_or_obstacles() -> None:
     assert payload["obstacles"] == []
 
 
+def test_relationship_payload_supports_rep103_optical_coordinates() -> None:
+    payload = build_relationship_payload(
+        _robot(),
+        [_track()],
+        coordinate_mode="ros_optical",
+    )
+
+    assert payload["coordinate_convention"] == "x_right_y_down_z_forward_m"
+    assert payload["arm"]["center_m"] == pytest.approx(
+        {"x": 0.1, "y": -0.2, "z": 0.4}
+    )
+    assert payload["obstacles"][0]["obstacle_center_m"] == pytest.approx(
+        {"x": 0.4, "y": -0.1, "z": 0.8}
+    )
+
+
+def test_bimanual_relationship_uses_nearest_tcp_and_exports_both() -> None:
+    robot = _robot()
+    robot.localization_source = "urdf_fk_joint_state_bimanual"
+    robot.link_points_xyz = {
+        "left_tcp": np.array((0.35, 0.75, 0.10), dtype=np.float32),
+        "right_tcp": np.array((-0.4, 0.4, 0.2), dtype=np.float32),
+    }
+
+    payload = build_relationship_payload(
+        robot,
+        [_track()],
+        coordinate_mode="internal_z_up",
+    )
+
+    assert set(payload["arm"]["tcp_centers_m"]) == {"left_tcp", "right_tcp"}
+    obstacle = payload["obstacles"][0]
+    assert obstacle["nearest_arm_point"] == "left_tcp"
+    assert obstacle["center_distance_m"] == pytest.approx(
+        np.linalg.norm(_track().position_xyz - robot.link_points_xyz["left_tcp"])
+    )
+    assert payload["nearest_obstacle"]["nearest_arm_point"] == "left_tcp"
+
+
 def test_relationship_publisher_emits_json_and_respects_rate_gate() -> None:
     class FakeString:
         def __init__(self) -> None:

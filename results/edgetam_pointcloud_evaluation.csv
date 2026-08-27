@@ -1,0 +1,11 @@
+scenario,expectation,frames,observation_frames,passed,id_switches,mean_position_error_m,final_state,pointcloud_outcome,edge_tam_metrics,details
+static,One persistent confirmed ID for a stationary obstacle,16,16,PASS,0,0.000612,CONFIRMED,GOOD geometry retained,N/A (EdgeTAM not invoked),unique_ids=1
+moving,Keep one ID and estimate a constant 3D velocity,26,26,PASS,0,0.001237,CONFIRMED,GOOD geometry retained,N/A (EdgeTAM not invoked),final_velocity_error_mps=0.000001
+crossing,Maintain two distinct IDs while trajectories cross,24,48,PASS,0,0.001994,CONFIRMED+CONFIRMED,Two point-cloud tracks,N/A (EdgeTAM not invoked),"object_ids=1,2"
+occlusion,Predict through a short cloud gap and recover the same ID,15,12,PASS,0,0.000972,CONFIRMED,Prediction during 3 missing frames,N/A (EdgeTAM not invoked),gap_states=OCCLUDED+OCCLUDED+OCCLUDED
+leave_reappear,Delete an expired track; a later return receives a new ID,24,10,PASS,1,0.000000,CONFIRMED,Expired geometry not held indefinitely,N/A (EdgeTAM not invoked),before_id=1;after_id=2
+sparse,Degrade confidence/quality without deleting a valid sparse obstacle,3,3,PASS,0,0.000000,CONFIRMED,SPARSE,N/A (EdgeTAM not invoked),quality_score=0.786667;points=6
+mask_drift,Reject a drifted mask and retain point-cloud geometry/ID,3,3,PASS,0,0.000000,CONFIRMED,fallback:mask_quality_invalid,N/A (synthetic mask quality only; no model inference),mask_quality=INVALID;mask_score=0.164773;fallback_points=72
+rgb_missing,Continue point-cloud tracking with no RGB or mask observation,10,10,PASS,0,0.000988,CONFIRMED,GOOD geometry; mask UNAVAILABLE,N/A (RGB deliberately absent),mask input omitted for every frame
+robot_motion,Transform moving-camera cloud into a stable tracking frame,12,12,PASS,0,0.000000,CONFIRMED,TF-transformed point-cloud track,N/A (EdgeTAM not invoked),camera_translation_x=0.000..0.275 m
+hand_entrance,Immediately confirm a newly observed near-field obstacle,4,5,PASS,0,0.000000,CONFIRMED,Emergency near-field point-cloud track,N/A (EdgeTAM not invoked),hit_count=1;nearest_distance_m=0.138518

@@ -37,7 +37,7 @@ the LAN interface, enables SPDP multicast for domain-wide discovery, and keeps
 the camera's ROS `web_video_server`, then republishes decoded frames on
 `/realtime_safety/camera/image_raw` for local RQT use. This prevents a second
 153–230 KB raw DDS stream from crossing Wi-Fi. Direct raw ROS input remains
-available with `KOCH_CAMERA_SOURCE=ros2:///koch_remote/camera/image_raw`.
+available with `CAMERA_SOURCE=ros2:///my_camera/image_raw`.
 `ParticipantIndex=auto` allows multiple ROS processes on one computer without
 a UDP port collision. All endpoints need the same
 `ROS_DOMAIN_ID`, `ROS_LOCALHOST_ONLY=0`, and RMW installed. Point coordinates

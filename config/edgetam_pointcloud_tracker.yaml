@@ -1,0 +1,309 @@
+edgetam_pointcloud_tracker:
+  ros__parameters:
+    input_mode: live
+    # Existing repository interfaces are reused where they are known. Empty
+    # strings mean that the sensor is not provided; point-cloud-only mode keeps
+    # running and reports the missing fusion input in diagnostics.
+    topics.rgb_image: /realtime_safety/camera/image_raw
+    topics.depth_image: ""
+    # Paired by the 8080 application with the same acquisition stamp/frame as
+    # topics.rgb_image. The Koch camera's remote CameraInfo is unusable (zero K).
+    topics.camera_info: /realtime_safety/camera/camera_info
+    topics.set_enabled_service: /edgetam_tracker/set_enabled
+    topics.pointcloud: /realtime_safety/pointcloud
+    topics.joint_states: /joint_states
+    topics.output_obstacles: /edgetam_tracker/obstacles
+    topics.output_obstacle_cloud: /edgetam_tracker/obstacle_cloud
+    topics.output_legacy_obstacle_cloud: /realtime_safety/yolo_obstacles/pointcloud
+    topics.output_self_filtered_cloud: /edgetam_tracker/self_filtered_cloud
+    topics.output_debug_image: /edgetam_tracker/debug_image
+    topics.output_debug_cloud: /edgetam_tracker/debug_cloud
+    topics.output_markers: /edgetam_tracker/markers
+    topics.output_diagnostics: /edgetam_tracker/diagnostics
+    topics.output_fps: /edgetam_tracker/fps
+    topics.output_latency_ms: /edgetam_tracker/latency_ms
+    topics.set_enabled_service: /edgetam_tracker/set_enabled
+
+    # `realtime_safety_frame` is the only frame contract present in the
+    # existing repository. Set real base/camera frames once TF is available.
+    frames.tracking_frame: realtime_safety_frame
+    frames.robot_base_frame: realtime_safety_frame
+    frames.camera_frame: ""
+    frames.tf_timeout_sec: 0.08
+
+    sync.queue_size: 10
+    sync.slop_sec: 0.08
+    sync.max_data_age_sec: 0.35
+    # Permit the conventional zero stamp only for latched/static calibration;
+    # nonzero CameraInfo stamps must still match the image within sync.slop.
+    sync.allow_static_camera_info: true
+    sync.pointcloud_fallback_delay_sec: 0.10
+    sync.sensor_stale_timeout_sec: 0.50
+
+    # Coordinates are interpreted in tracking_frame. These defaults cover the
+    # existing camera-forward Koch workspace and must be checked in RViz.
+    workspace.min_x: -1.50
+    workspace.max_x: 1.50
+    workspace.min_y: 0.05
+    workspace.max_y: 4.00
+    workspace.min_z: -2.00
+    workspace.max_z: 2.00
+
+    pointcloud.voxel_size: 0.025
+    pointcloud.remove_outliers: true
+    pointcloud.outlier_method: statistical
+    pointcloud.outlier_mean_k: 16
+    pointcloud.outlier_stddev: 2.0
+    pointcloud.outlier_radius_m: 0.08
+    pointcloud.outlier_min_neighbors: 3
+    # Startup ray/depth subtraction below owns fixed-surface rejection. Do not
+    # run RANSAC afterwards: a broad palm or sheet is itself planar and can be
+    # deleted by a dominant-plane heuristic.
+    pointcloud.remove_plane: false
+    pointcloud.plane_distance_threshold: 0.025
+    pointcloud.plane_ransac_iterations: 160
+    pointcloud.plane_min_inliers: 80
+    pointcloud.plane_min_inlier_ratio: 0.35
+    # Koch PointCloud2 is x-right/y-forward/z-down, so a frontal background
+    # plane has its normal along the forward/depth (y) axis.
+    pointcloud.plane_normal_axis: [0.0, 1.0, 0.0]
+    pointcloud.plane_max_angle_deg: 25.0
+    # Only the measured ~0.40 m wooden background may be removed. A hand or
+    # sheet closer to the camera remains foreground even if it is planar and
+    # occupies much of the image.
+    pointcloud.plane_min_distance_m: 0.34
+    pointcloud.plane_max_distance_m: 0.48
+    pointcloud.minimum_depth_m: 0.05
+    pointcloud.maximum_depth_m: 4.0
+    pointcloud.use_high_resolution_for_final_geometry: true
+
+    # Fixed-camera startup background calibration. Keep the workspace empty
+    # for roughly the first 3 seconds. The baseline includes the wooden panel,
+    # table edge and stationary robot fixtures; only newly introduced geometry
+    # such as a hand/tool is then proposed to EdgeTAM.
+    background.enabled: true
+    background.warmup_frames: 12
+    background.calibration_frames: 16
+    background.voxel_size: 0.015
+    # Signed protrusion threshold. 18 mm rejects ordinary depth noise while a
+    # hand/tool measurably closer than the learned surface remains foreground.
+    background.distance_threshold_m: 0.018
+    background.minimum_baseline_points: 300
+    # Match fixed surfaces along camera rays instead of raw 3D nearest-neighbour
+    # distance. This is stable when monocular metric depth slowly changes its
+    # common scale, and signed depth keeps only geometry closer than background.
+    background.ray_depth_enabled: true
+    background.depth_axis: 1
+    background.horizontal_axis: 0
+    background.vertical_axis: 2
+    # Normalized image-ray distance; 0.025 is about 6.8 px at fx=272.
+    background.ray_distance_threshold: 0.025
+    background.alignment_enabled: true
+    background.alignment_min_points: 300
+    background.alignment_ratio_tolerance: 0.04
+    # Metric Video Depth can drift well beyond 35% during a day-long process.
+    # A current depth at 55% of its baseline needs an 82% corrective ratio.
+    # Distributed peripheral ray/tile consensus prevents a local hand from
+    # voting this global correction, so permit that bounded recovery.
+    background.maximum_scale_change: 0.85
+    # Background scale uses distributed peripheral ray/tile geometry only.
+    # RGB auto-exposure and white-balance drift overnight, so colour must not
+    # invalidate an otherwise strong global depth-scale consensus. RGB remains
+    # mandatory later in the dedicated hand semantic gate.
+    background.alignment_color_distance: 0.0
+    background.alignment_require_color: false
+    background.alignment_periphery_fraction: 0.18
+    background.alignment_min_support_ratio: 0.60
+    background.alignment_min_span_ratio: 0.65
+    # A 4x3 ring must contain distributed background texture; a central or
+    # one-sided object cannot vote the entire point cloud onto its own depth.
+    background.alignment_min_points_per_tile: 20
+    background.alignment_min_occupied_tiles: 6
+    # Live measurements show valid candidates can be intermittent. Require at
+    # least 5 stable samples in 7 frames, then rate-limit scale increases that
+    # could otherwise erase a near obstacle.
+    background.alignment_window_frames: 7
+    background.alignment_min_valid_frames: 5
+    background.alignment_max_relative_mad: 0.0075
+    background.alignment_max_window_range: 0.035
+    background.alignment_max_step_fraction: 0.03
+    # Recover a corroborated global scale in tens of seconds instead of
+    # remaining fail-closed for hours. Subtraction stays held until the
+    # slew-limited scale is within 1% of the stable target.
+    background.alignment_max_upward_rate_per_sec: 0.05
+    # Bridge isolated RGB/correspondence dropouts only. A sustained failure
+    # holds hand-only publication so the controller stops on perception
+    # timeout; it must never publish the complete scene as a hand.
+    background.alignment_hold_frames: 12
+
+    # No URDF/link frames exist in this repository, so the safe default is
+    # explicitly disabled, not silently "successful". Configure matching lists
+    # of link frames/radii before enabling.
+    self_filter.enabled: false
+    self_filter.mode: tf_spheres
+    self_filter.link_frames: []
+    self_filter.link_radii_m: []
+    self_filter.padding: 0.03
+    self_filter.fail_closed: true
+
+    clustering.method: dbscan
+    # Keep a 6 cm table-depth leak from bridging into a hand cluster.
+    clustering.tolerance: 0.045
+    clustering.min_points: 12
+    clustering.max_points: 100000
+    clustering.min_dimension: 0.015
+    clustering.max_dimension: 2.50
+    clustering.maximum_clusters: 64
+    clustering.final_geometry_padding_m: 0.035
+    # Axis in tracking_frame used for the point-cloud depth-variance quality
+    # feature: 0=x, 1=y, 2=z. Match this to the forward/depth convention.
+    clustering.depth_axis: 1
+    # Preserve at least this many connected returns inside the emergency
+    # distance even when the normal clustering minimum is not met.
+    clustering.emergency_min_points: 3
+
+    tracking.enabled: true
+    tracking.confirmation_hits: 3
+    tracking.maximum_missed_frames: 5
+    tracking.maximum_association_distance: 0.35
+    # Reject implausible cross-frame assignments before they can make a hand
+    # cloud jump between unrelated foreground clusters.
+    tracking.maximum_mahalanobis_distance: 6.0
+    tracking.maximum_size_log_difference: 1.6
+    tracking.maximum_count_log_difference: 2.5
+    tracking.maximum_association_cost: 0.82
+    tracking.maximum_occluded_frames: 3
+    tracking.occluded_retention_sec: 0.50
+    tracking.lost_retention_sec: 1.00
+    tracking.maximum_prediction_age_sec: 1.00
+    tracking.maximum_tentative_misses: 1
+    tracking.tentative_retention_sec: 0.35
+    tracking.missed_confidence_decay: 0.82
+    tracking.measured_velocity_blend: 0.30
+    tracking.process_noise: 0.50
+    tracking.measurement_noise: 0.03
+    tracking.prediction_horizons: [0.2, 0.5, 1.0]
+    tracking.centroid_cost_weight: 0.45
+    tracking.bbox_cost_weight: 0.20
+    tracking.size_cost_weight: 0.15
+    tracking.point_count_cost_weight: 0.10
+    tracking.mask_iou_cost_weight: 0.10
+
+    # Operational seed definition until a trained RGB hand-seg checkpoint is
+    # installed: only a newly appearing, coherently moving track may start an
+    # EdgeTAM object. Once accepted it remains an obstacle when the hand stops.
+    # This suppresses the fixed mouse, table and robot fixtures.
+    hand_candidate.enabled: true
+    hand_candidate.minimum_seed_speed_mps: 0.04
+    hand_candidate.minimum_motion_hits: 2
+    hand_candidate.maximum_seed_age_frames: 12
+
+    # A motion-gated 3D intrusion is only a candidate. Require a MediaPipe RGB
+    # hand mask to overlap that candidate's exact point-cloud projection before
+    # it is labelled/published as a hand or used to prompt EdgeTAM. A confirmed
+    # hand may survive a short landmark miss while EdgeTAM/3D tracking bridges
+    # blur and occlusion.
+    hand_semantics.enabled: true
+    hand_semantics.maximum_hands: 4
+    hand_semantics.minimum_detection_confidence: 0.50
+    hand_semantics.minimum_tracking_confidence: 0.45
+    hand_semantics.model_complexity: 0
+    hand_semantics.mask_padding_pixels: 4
+    # The Gazebo camera is fixed, so keep the detector in the native image
+    # orientation. Cycling rotations made otherwise identical frames alternate
+    # between detected/not-detected states in the dashboard.
+    hand_semantics.static_image_mode: false
+    hand_semantics.rotation_augmentation_degrees: [0]
+    hand_semantics.cycle_rotation_augmentation: false
+    hand_semantics.temporal_hold_frames: 8
+    hand_semantics.temporal_confidence_decay: 0.94
+    hand_semantics.minimum_flow_points: 4
+    hand_semantics.maximum_flow_error: 30.0
+    # MediaPipe's convex landmark hull contains gaps between fingers. Select
+    # only the coherent near-depth layer so those gaps cannot pull table rays
+    # into the hand obstacle cloud.
+    hand_semantics.foreground_depth_quantile: 0.10
+    hand_semantics.foreground_depth_span_m: 0.10
+    hand_semantics.minimum_box_iou: 0.05
+    hand_semantics.minimum_projection_coverage: 0.30
+    hand_semantics.minimum_positive_point_coverage: 0.40
+    hand_semantics.hold_frames: 8
+
+    projection.box_padding_px: 8
+    projection.minimum_box_width: 6
+    projection.minimum_box_height: 6
+    # Reject a leaked background cluster before it can create another nearly
+    # full-frame EdgeTAM prompt. Real hand/tool candidates remain well below
+    # this bound in the fixed 320x240 Koch view.
+    projection.maximum_box_area_ratio: 0.80
+    projection.dilation_pixels: 1
+    projection.positive_point_count: 5
+    projection.negative_point_count: 4
+    projection.use_projection_mask_prompt: true
+    projection.minimum_projected_points: 6
+    # Existing Koch PointCloud2 is x-right/y-forward/z-down. Standard ROS
+    # optical RGB-D clouds should set this to `ros_optical`.
+    projection.camera_axis_mode: x_right_y_forward_z_down
+
+    edgetam.enabled: true
+    edgetam.repository_path: third_party/EdgeTAM
+    edgetam.checkpoint_path: models/edgetam/edgetam.pt
+    edgetam.model_config: configs/edgetam.yaml
+    edgetam.device: cuda
+    edgetam.precision: auto
+    # Official pinned config uses 1024x1024; non-1024 values are rejected.
+    edgetam.input_width: 1024
+    edgetam.input_height: 1024
+    edgetam.prompt_confirmed_tracks_only: true
+    edgetam.minimum_prompt_interval_sec: 0.50
+    edgetam.maximum_objects: 16
+    edgetam.clear_memory_on_reset: true
+    edgetam.rolling_window_frames: 2
+    edgetam.jpeg_quality: 95
+    edgetam.offload_video_to_cpu: false
+    edgetam.offload_state_to_cpu: false
+
+    fusion.mask_erode_pixels: 1
+    fusion.mask_dilate_pixels: 0
+    fusion.minimum_valid_depth_ratio: 0.35
+    fusion.minimum_mask_cluster_iou: 0.25
+    fusion.maximum_centroid_difference_m: 0.25
+    fusion.maximum_mask_area_change_ratio: 2.50
+    fusion.re_prompt_after_invalid_frames: 2
+    fusion.depth_gate_m: 0.12
+    fusion.spatial_gate_padding_m: 0.06
+    fusion.minimum_fused_points: 10
+
+    quality.mask_good_threshold: 0.70
+    quality.mask_degraded_threshold: 0.40
+    quality.mask_score_weight: 0.10
+    quality.projected_cluster_coverage_weight: 0.20
+    quality.valid_depth_ratio_weight: 0.15
+    quality.mask_cluster_iou_weight: 0.20
+    quality.temporal_mask_iou_weight: 0.15
+    quality.prediction_consistency_weight: 0.15
+    quality.area_change_weight: 0.05
+    quality.pointcloud_weight: 0.50
+    quality.temporal_tracking_weight: 0.30
+    quality.mask_consistency_weight: 0.20
+
+    safety.emergency_distance_m: 0.25
+    safety.base_uncertainty_margin_m: 0.03
+    safety.maximum_uncertainty_margin_m: 0.25
+    safety.tf_failure_policy: hold
+
+    # Opt-in only. The koch_lan supervisor disables the legacy YOLO publisher
+    # before setting this true, guaranteeing one canonical publisher.
+    compatibility.publish_legacy_obstacle_alias: false
+
+    performance.use_latest_frame_only: true
+    performance.maximum_queue_length: 1
+    performance.publish_debug_image: true
+    performance.publish_debug_cloud: true
+    performance.publish_markers: true
+    performance.profile_latency: true
+    # When all geometry inputs pause, publish bounded KF predictions only
+    # between the fallback delay and sensor_stale_timeout. Prediction messages
+    # are explicitly marked prediction_only and retain last_measurement_stamp.
+    performance.prediction_publish_rate_hz: 10.0
+    performance.diagnostics_rate_hz: 2.0

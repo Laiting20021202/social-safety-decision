@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Any
@@ -9,6 +10,24 @@ import cv2
 import numpy as np
 
 LOGGER = logging.getLogger(__name__)
+
+CAMERA_QOS_PROFILES = ("sensor_data", "best_effort", "reliable")
+
+
+def normalize_camera_qos(value: str | None) -> str:
+    """Return the requested ROS image QoS profile.
+
+    Isaac Sim publishes camera data with the ROS sensor-data (best-effort)
+    profile.  A reliable-only subscriber is incompatible with that publisher,
+    so live camera inputs default to the standard sensor-data profile while a
+    reliable hardware stream can still opt in explicitly.
+    """
+
+    profile = str(value or "sensor_data").strip().lower().replace("-", "_")
+    if profile not in CAMERA_QOS_PROFILES:
+        options = ", ".join(CAMERA_QOS_PROFILES)
+        raise ValueError(f"Unsupported camera QoS {value!r}; expected one of: {options}")
+    return profile
 
 
 def image_message_to_bgr(message: Any) -> np.ndarray:
@@ -69,6 +88,7 @@ class Ros2ImageCapture:
         stale_after_seconds: float = 2.5,
         preview_topic: str | None = None,
         preview_rate_hz: float = 10.0,
+        qos_profile: str | None = None,
     ) -> None:
         if not topic.startswith("/") or any(char.isspace() for char in topic):
             raise ValueError("ROS image topic must be an absolute name without whitespace")
@@ -81,6 +101,9 @@ class Ros2ImageCapture:
         self.is_compressed = topic.rstrip("/").endswith("/compressed")
         self.stale_after_seconds = max(float(stale_after_seconds), 0.1)
         self.preview_topic = preview_topic
+        self.qos_profile = normalize_camera_qos(
+            qos_profile or os.environ.get("REALTIME_CAMERA_QOS")
+        )
         self._preview_minimum_interval = 1.0 / max(float(preview_rate_hz), 0.1)
         self._lock = threading.Lock()
         self._runtime: Any | None = None
@@ -107,15 +130,15 @@ class Ros2ImageCapture:
 
         runtime = acquire_ros2_runtime()
         node = Node(self.node_name, context=runtime.context)
+        reliability = (
+            ReliabilityPolicy.RELIABLE
+            if self.qos_profile == "reliable"
+            else ReliabilityPolicy.BEST_EFFORT
+        )
         qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
-            # The Koch camera publishes RELIABLE.  A raw 320x240 RGB frame is
-            # split across many UDP datagrams; BEST_EFFORT can therefore lose
-            # the complete frame when only one Wi-Fi fragment is dropped.
-            # RELIABLE retransmits missing fragments while depth=1 prevents a
-            # slow consumer from accumulating stale video.
-            reliability=ReliabilityPolicy.RELIABLE,
+            reliability=reliability,
             durability=DurabilityPolicy.VOLATILE,
         )
         message_type = CompressedImage if self.is_compressed else Image
@@ -133,9 +156,10 @@ class Ros2ImageCapture:
         self._image_type = Image
         transport = "compressed" if self.is_compressed else "raw"
         LOGGER.info(
-            "Subscribing to ROS 2 %s camera topic %s with reliable latest-frame QoS",
+            "Subscribing to ROS 2 %s camera topic %s with %s latest-frame QoS",
             transport,
             self.topic,
+            self.qos_profile,
         )
 
     def _on_image(self, message: Any) -> None:

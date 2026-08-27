@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 import threading
+import logging
+import time
 from collections import OrderedDict
 from typing import Any
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
-from realtime_safety.config import GuiConfig
+from realtime_safety.config import GuiConfig, OpenArmConfig
+from realtime_safety.gui.metric_bev import (
+    MetricBevCalibration,
+    fit_metric_bev,
+    rasterize_metric_bev,
+)
+from realtime_safety.gui.openarm_scene import OpenArmScene
 from realtime_safety.types import PointCloudFrame, RobotArmState, Track3DState
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ReconstructionScene3D:
@@ -18,7 +30,12 @@ class ReconstructionScene3D:
     like the upstream St4RTrack visualizer.
     """
 
-    def __init__(self, server: Any, config: GuiConfig) -> None:
+    def __init__(
+        self,
+        server: Any,
+        config: GuiConfig,
+        openarm_config: OpenArmConfig | None = None,
+    ) -> None:
         self.server = server
         self.config = config
         self._lock = threading.RLock()
@@ -26,7 +43,55 @@ class ReconstructionScene3D:
         self._center: np.ndarray | None = None
         self._camera_pose: tuple[np.ndarray, np.ndarray] | None = None
         self._camera_fitted_clients: set[int] = set()
+        self._top_down_view = bool(config.metric_bev_enabled)
         self._closed = False
+        self._edge_obstacle_handle: Any | None = None
+        self._edge_obstacle_points = np.empty((0, 3), dtype=np.float32)
+        self._bev_enabled = bool(config.metric_bev_enabled)
+        self._bev_obstacle_height_m = float(
+            config.metric_bev_obstacle_height_m
+        )
+        self._bev_calibration: MetricBevCalibration | None = None
+        self._bev_recalibrate_requested = True
+        self._bev_cloud_handle: Any | None = None
+        self._bev_edge_handle: Any | None = None
+        self._bev_obstacle_handles: dict[str, Any] = {}
+        self._apriltag_handles: dict[str, Any] = {}
+        self._apriltag_center_work: np.ndarray | None = None
+        self._apriltag_corners_work: np.ndarray | None = None
+        self._last_apriltag_scale: float | None = None
+        self._sim_debug_enabled = False
+        self._sim_debug_handles: dict[str, Any] = {}
+        self._sim_debug_local: dict[str, Any] = {}
+        self._sim_debug_status: Any | None = None
+        self._sim_last_render_at: dict[str, float] = {"world": 0.0, "raw": 0.0}
+        # Match the 15 Hz Gazebo depth sensor. This layer is a strict current
+        # frame replacement; it never contains reconstruction history.
+        self._sim_render_interval_sec = 1.0 / 15.0
+        self._sim_debug_frame_index: dict[str, int] = {"world": 0, "raw": 0}
+        self._edge_last_input_at = 0.0
+        self._edge_last_nonempty_at = 0.0
+        # Neural hand masks can miss an isolated RGB-D frame.  Keep the last
+        # *visual* cloud briefly so the browser does not blink; sustained
+        # empty measurements still clear it and safety timeouts remain owned
+        # by the controller-facing ROS path.
+        # Simulator mode receives a current-depth resampled cloud at ~10 Hz.
+        # Bridge only a few display frames; a longer hold visibly leaves the
+        # obstacle behind after the hand exits the RGB image.
+        self._edge_visual_hold_sec = 0.35
+        self._edge_input_rate_hz = 0.0
+        self._edge_last_render_at = 0.0
+        self._edge_render_interval_sec = 0.10
+        self._requires_apriltag_anchor = bool(
+            openarm_config is not None
+            and openarm_config.enabled
+            and openarm_config.base_anchor == "apriltag"
+        )
+        self._openarm = (
+            OpenArmScene(server, openarm_config)
+            if openarm_config is not None and openarm_config.enabled
+            else None
+        )
 
         self.server.scene.set_up_direction("+z")
         self.server.initial_camera.position = (3.0, -5.0, 2.5)
@@ -34,7 +99,15 @@ class ReconstructionScene3D:
         self.server.initial_camera.up = (0.0, 0.0, 1.0)
         self.server.initial_camera.fov = np.deg2rad(55.0)
 
-        self._frames_root = self.server.scene.add_frame("/frames", show_axes=False)
+        self._frames_root = self.server.scene.add_frame(
+            "/frames", show_axes=False, visible=not self._bev_enabled
+        )
+        self._edge_root = self.server.scene.add_frame(
+            "/edgetam", show_axes=False, visible=not self._bev_enabled
+        )
+        self._bev_root = self.server.scene.add_frame(
+            "/metric_bev", show_axes=False, visible=self._bev_enabled
+        )
         with self.server.gui.add_folder(
             "Scene Layers" if config.presentation_mode else "4D Reconstruction",
             order=30,
@@ -59,7 +132,26 @@ class ReconstructionScene3D:
             self._frame_status = self.server.gui.add_markdown("Waiting for a reconstructed frame…")
 
         with self.server.gui.add_folder(
-            "Obstacle Tracking" if config.presentation_mode else "Obstacles · YOLO + 3D",
+            "3D Safety RGB-D Backprojection",
+            order=29,
+            expand_by_default=True,
+        ) as sim_folder:
+            self._sim_folder = sim_folder
+            self._show_sim_world = self.server.gui.add_checkbox(
+                "World-frame cloud", initial_value=True
+            )
+            self._show_sim_raw = self.server.gui.add_checkbox(
+                "Raw camera-frame cloud", initial_value=False
+            )
+            self._show_sim_geometry = self.server.gui.add_checkbox(
+                "Table / AprilTag / axes", initial_value=True
+            )
+            self._sim_debug_status = self.server.gui.add_markdown(
+                "Waiting for synchronized RGB + aligned depth…"
+            )
+
+        with self.server.gui.add_folder(
+            "Obstacle Tracking" if config.presentation_mode else "Obstacles · 3D Tracking",
             order=31,
             expand_by_default=not config.presentation_mode,
         ) as people_folder:
@@ -68,7 +160,15 @@ class ReconstructionScene3D:
             self._show_person_centers = self.server.gui.add_checkbox("Obstacle centers", initial_value=True)
             self._show_person_directions = self.server.gui.add_checkbox("Direction arrows", initial_value=True)
             self._show_person_labels = self.server.gui.add_checkbox("Track labels", initial_value=True)
-            self._people_status = self.server.gui.add_markdown("Waiting for aligned YOLO obstacle masks…")
+            self._show_edge_foreground = self.server.gui.add_checkbox(
+                "Extracted obstacle points", initial_value=True
+            )
+            self._edge_foreground_status = self.server.gui.add_markdown(
+                "Extracted obstacles: **0 points**"
+            )
+            self._people_status = self.server.gui.add_markdown(
+                "Waiting for aligned 3D obstacle tracks…"
+            )
 
         with self.server.gui.add_folder(
             "Robot ↔ Obstacle Geometry",
@@ -77,15 +177,29 @@ class ReconstructionScene3D:
         ) as relationship_folder:
             self._relationship_folder = relationship_folder
             self._show_robot_center = self.server.gui.add_checkbox(
-                "Robot arm center",
-                initial_value=True,
+                "Legacy RGB arm center",
+                initial_value=self._openarm is None,
             )
             self._show_relationships = self.server.gui.add_checkbox(
                 "Center-distance links",
                 initial_value=True,
             )
             self._relationship_status = self.server.gui.add_markdown(
-                "Waiting for the anchored green Koch arm…"
+                "Waiting for robot localization…"
+            )
+
+        with self.server.gui.add_folder(
+            "Metric BEV / 數學鳥瞰校正",
+            order=66,
+            expand_by_default=True,
+        ) as bev_folder:
+            self._bev_folder = bev_folder
+            self._bev_status = self.server.gui.add_markdown(
+                "正在估計實體工作平面… / Estimating physical work plane…"
+            )
+            self._bev_preview = self.server.gui.add_image(
+                np.full((270, 360, 3), 12, dtype=np.uint8),
+                label="Orthographic metric occupancy / 正射公尺佔用圖",
             )
 
         self._controls = [
@@ -96,14 +210,22 @@ class ReconstructionScene3D:
             self._history_stride,
             self._timestep,
             self._frame_status,
+            self._show_sim_world,
+            self._show_sim_raw,
+            self._show_sim_geometry,
+            self._sim_debug_status,
             self._show_person_boxes,
             self._show_person_centers,
             self._show_person_directions,
             self._show_person_labels,
             self._people_status,
+            self._show_edge_foreground,
+            self._edge_foreground_status,
             self._show_robot_center,
             self._show_relationships,
             self._relationship_status,
+            self._bev_status,
+            self._bev_preview,
         ]
         self._show_reconstruction.on_update(lambda _: self._refresh_visibility())
         self._show_tracking.on_update(lambda _: self._refresh_visibility())
@@ -111,10 +233,16 @@ class ReconstructionScene3D:
         self._show_all.on_update(lambda _: self._on_show_all())
         self._history_stride.on_update(lambda _: self._refresh_visibility())
         self._timestep.on_update(lambda _: self._on_timestep())
+        self._show_sim_world.on_update(lambda _: self._refresh_sim_debug_visibility())
+        self._show_sim_raw.on_update(lambda _: self._refresh_sim_debug_visibility())
+        self._show_sim_geometry.on_update(lambda _: self._refresh_sim_debug_visibility())
         self._show_person_boxes.on_update(lambda _: self._refresh_visibility())
         self._show_person_centers.on_update(lambda _: self._refresh_visibility())
         self._show_person_directions.on_update(lambda _: self._refresh_visibility())
         self._show_person_labels.on_update(lambda _: self._refresh_visibility())
+        self._show_edge_foreground.on_update(
+            lambda _: self._refresh_visibility()
+        )
         self._show_robot_center.on_update(lambda _: self._refresh_visibility())
         self._show_relationships.on_update(lambda _: self._refresh_visibility())
 
@@ -124,13 +252,29 @@ class ReconstructionScene3D:
 
     @property
     def node_count(self) -> int:
-        return 1 + sum(3 + len(handles["people"]) for handles in self._frames.values())
+        return (
+            1
+            + int(self._edge_obstacle_handle is not None)
+            + int(self._bev_cloud_handle is not None)
+            + int(self._bev_edge_handle is not None)
+            + len(self._bev_obstacle_handles)
+            + len(self._apriltag_handles)
+            + sum(
+                3 + len(handles["people"])
+                for handles in self._frames.values()
+            )
+        )
 
     @property
     def frame_count(self) -> int:
         return len(self._frames)
 
     def update_pointcloud(self, frame: PointCloudFrame, defer_visibility: bool = False) -> None:
+        # Simulator mode has a dedicated metric world cloud.  Rebuilding the
+        # hidden reconstruction tree from the same 307k-point RGB-D message
+        # only duplicates WebSocket/GPU traffic and can starve GUI commands.
+        if self._sim_debug_enabled:
+            return
         points = np.asarray(frame.points, dtype=np.float32).reshape(-1, 3)
         colors = np.asarray(frame.colors, dtype=np.uint8).reshape(-1, 3)
         valid = np.isfinite(points).all(axis=1)
@@ -149,6 +293,24 @@ class ReconstructionScene3D:
         with self._lock:
             if self._closed:
                 return
+            if frame.apriltag_locked and frame.apriltag_scale_correction is not None:
+                scale = float(frame.apriltag_scale_correction)
+                # Rebase exactly once when arbitrary model units first become
+                # metric. Afterwards the task-plane basis is a latched world
+                # frame; slow tag/depth noise must not make it jump while an
+                # obstacle enters or leaves. Operators can explicitly request
+                # a new fit with the GUI recalibration button.
+                needs_metric_rebase = self._last_apriltag_scale is None
+                if needs_metric_rebase:
+                    # A plane basis and raw-view center fitted before the tag
+                    # lock carry the model's old arbitrary units. Refit both
+                    # on the now-scaled frame so no mixed-unit geometry remains.
+                    self._center = None
+                    self._bev_calibration = None
+                    self._bev_recalibrate_requested = True
+                    self._camera_pose = None
+                    self._camera_fitted_clients.clear()
+                    self._last_apriltag_scale = scale
             if self._center is None:
                 self._center = _robust_center(points)
             centered_points = points - self._center
@@ -213,6 +375,636 @@ class ReconstructionScene3D:
                 self._refresh_visibility_locked()
             if self._camera_pose is None:
                 self._configure_camera(centered_points)
+            self._update_metric_bev(frame, points, colors)
+            if self._openarm is not None and not self._sim_debug_enabled:
+                self._openarm.set_spatial_context(
+                    center=self._center,
+                    bev_enabled=self._bev_enabled,
+                    calibration=self._bev_calibration,
+                    apriltag_center_work=self._apriltag_center_work,
+                    apriltag_locked=self._apriltag_center_work is not None,
+                )
+
+    def configure_simulator_debug(
+        self,
+        scene_config: dict[str, Any],
+        camera_config: dict[str, Any],
+    ) -> None:
+        """Create exact-metric simulator overlays in the ROS world frame."""
+
+        explicit_pose = camera_config.get("world_pose")
+        if explicit_pose:
+            position = np.asarray(explicit_pose["position"], dtype=float)
+            world_from_link = Rotation.from_euler(
+                "xyz", explicit_pose["rpy_deg"], degrees=True
+            ).as_matrix()
+        else:
+            workspace = np.asarray(
+                scene_config["zones"]["workspace"]["center"], dtype=float
+            )
+            position = workspace + np.array(
+                [
+                    -float(camera_config["horizontal_offset_to_workspace_center"]),
+                    float(camera_config["lateral_offset"]),
+                    float(camera_config["height_above_table"]),
+                ]
+            )
+            target = workspace + np.asarray(
+                camera_config.get("aim_offset", [0.0, 0.0, 0.0]), dtype=float
+            )
+            forward = target - position
+            forward /= np.linalg.norm(forward)
+            left = np.cross(np.array([0.0, 0.0, 1.0]), forward)
+            left /= np.linalg.norm(left)
+            up = np.cross(forward, left)
+            world_from_link = np.column_stack((forward, left, up))
+        optical_to_link = np.array(
+            [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+            dtype=float,
+        )
+        optical_xyzw = Rotation.from_matrix(world_from_link @ optical_to_link).as_quat()
+        table = scene_config["table"]
+        tag = scene_config["apriltag"]
+        table_xyzw = Rotation.from_euler(
+            "z", float(table.get("yaw_deg", 0.0)), degrees=True
+        ).as_quat()
+        empty = np.empty((0, 3), dtype=np.float32)
+        with self._lock:
+            self._sim_debug_enabled = True
+            table_center = np.asarray(scene_config["table"]["center"], dtype=float)
+            look_at = table_center + np.array([-0.20, 0.0, 0.30])
+            view_position = look_at + np.array([1.45, -1.55, 1.20])
+            self._camera_pose = (view_position, look_at)
+            self.server.initial_camera.position = view_position
+            self.server.initial_camera.look_at = look_at
+            self.server.initial_camera.up = (0.0, 0.0, 1.0)
+            self._camera_fitted_clients.clear()
+            self._frames_root.visible = False
+            self._show_reconstruction.value = False
+            root = self.server.scene.add_frame(
+                "/sim_debug/world", show_axes=True, axes_length=0.15, axes_radius=0.004
+            )
+            camera = self.server.scene.add_frame(
+                "/sim_debug/camera_optical",
+                show_axes=True,
+                axes_length=0.10,
+                axes_radius=0.003,
+                position=tuple(position),
+                wxyz=(
+                    float(optical_xyzw[3]),
+                    float(optical_xyzw[0]),
+                    float(optical_xyzw[1]),
+                    float(optical_xyzw[2]),
+                ),
+            )
+            raw = self.server.scene.add_point_cloud(
+                "/sim_debug/camera_optical/raw_cloud",
+                points=empty,
+                colors=np.empty((0, 3), dtype=np.uint8),
+                point_size=self.config.point_size,
+                point_shape="rounded",
+                precision="float16",
+                visible=False,
+            )
+            world = self.server.scene.add_point_cloud(
+                "/sim_debug/world/cloud",
+                points=empty,
+                colors=np.empty((0, 3), dtype=np.uint8),
+                point_size=self.config.point_size,
+                point_shape="rounded",
+                precision="float16",
+            )
+            table_box = self.server.scene.add_box(
+                "/sim_debug/world/table",
+                dimensions=np.asarray(table["size"], dtype=float),
+                position=tuple(table["center"]),
+                wxyz=(
+                    float(table_xyzw[3]),
+                    float(table_xyzw[0]),
+                    float(table_xyzw[1]),
+                    float(table_xyzw[2]),
+                ),
+                color=tuple(int(255 * value) for value in table["color_rgb"]),
+                opacity=0.22,
+            )
+            tag_box = self.server.scene.add_box(
+                "/sim_debug/world/apriltag_8cm",
+                dimensions=(float(tag["size"]), float(tag["size"]), 0.002),
+                position=tuple(tag["center"]),
+                color=(255, 190, 35),
+                opacity=0.70,
+            )
+            self._sim_debug_handles = {
+                "root": root,
+                "camera": camera,
+                "raw": raw,
+                "world": world,
+                "table": table_box,
+                "tag": tag_box,
+            }
+            self._sim_debug_local = {
+                "optical_to_link": optical_to_link,
+                "camera_position": position.copy(),
+                "world_from_optical": world_from_link @ optical_to_link,
+                "table_center": np.asarray(table["center"], dtype=float),
+                "table_rotation": Rotation.from_quat(table_xyzw).as_matrix(),
+                "tag_center": np.asarray(tag["center"], dtype=float),
+            }
+            if self._openarm is not None:
+                self._openarm.set_spatial_context(
+                    center=None,
+                    bev_enabled=False,
+                    calibration=None,
+                    apriltag_center_work=None,
+                    apriltag_locked=False,
+                )
+            self._refresh_sim_debug_visibility_locked()
+
+    def update_simulator_entity_poses(self, entities: dict[str, Any]) -> None:
+        """Follow Gazebo model edits without feeding ground truth to perception."""
+
+        def pose(name: str) -> tuple[np.ndarray, Rotation] | None:
+            document = entities.get(name)
+            if not isinstance(document, dict):
+                return None
+            position = np.asarray(document.get("position", ()), dtype=float)
+            quaternion = np.asarray(document.get("orientation_xyzw", ()), dtype=float)
+            if position.shape != (3,) or quaternion.shape != (4,):
+                return None
+            if not np.isfinite(position).all() or not np.isfinite(quaternion).all():
+                return None
+            if np.linalg.norm(quaternion) <= 1e-9:
+                return None
+            return position, Rotation.from_quat(quaternion)
+
+        with self._lock:
+            if self._closed or not self._sim_debug_enabled:
+                return
+            camera_pose = pose("rgbd_sensor")
+            if camera_pose is not None and "camera" in self._sim_debug_handles:
+                position, rotation = camera_pose
+                optical_rotation = rotation.as_matrix() @ self._sim_debug_local["optical_to_link"]
+                self._sim_debug_local["camera_position"] = position.copy()
+                self._sim_debug_local["world_from_optical"] = optical_rotation.copy()
+                optical_xyzw = Rotation.from_matrix(optical_rotation).as_quat()
+                handle = self._sim_debug_handles["camera"]
+                handle.position = tuple(position)
+                handle.wxyz = tuple(float(value) for value in (
+                    optical_xyzw[3], optical_xyzw[0], optical_xyzw[1], optical_xyzw[2]
+                ))
+            table_pose = pose("work_table")
+            if table_pose is not None and "table" in self._sim_debug_handles:
+                origin, rotation = table_pose
+                handle = self._sim_debug_handles["table"]
+                handle.position = tuple(
+                    origin + rotation.apply(self._sim_debug_local["table_center"])
+                )
+                table_xyzw = Rotation.from_matrix(
+                    rotation.as_matrix() @ self._sim_debug_local["table_rotation"]
+                ).as_quat()
+                handle.wxyz = tuple(float(value) for value in (
+                    table_xyzw[3], table_xyzw[0], table_xyzw[1], table_xyzw[2]
+                ))
+            tag_pose = pose("apriltag_36h11_0")
+            if tag_pose is not None and "tag" in self._sim_debug_handles:
+                origin, rotation = tag_pose
+                handle = self._sim_debug_handles["tag"]
+                handle.position = tuple(
+                    origin + rotation.apply(self._sim_debug_local["tag_center"])
+                )
+                tag_xyzw = rotation.as_quat()
+                handle.wxyz = tuple(float(value) for value in (
+                    tag_xyzw[3], tag_xyzw[0], tag_xyzw[1], tag_xyzw[2]
+                ))
+            openarm_pose = pose("openarm")
+            if openarm_pose is not None and self._openarm is not None:
+                self._openarm.update_simulator_model_pose(*openarm_pose)
+
+    def update_simulator_debug_cloud(
+        self,
+        points: np.ndarray,
+        colors: np.ndarray,
+        world: bool,
+        rate_hz: float,
+    ) -> None:
+        with self._lock:
+            if self._closed or not self._sim_debug_enabled:
+                return
+            key = "world" if world else "raw"
+            if key == "raw" and not bool(self._show_sim_raw.value):
+                return
+            now = time.monotonic()
+            if now - self._sim_last_render_at[key] < self._sim_render_interval_sec:
+                return
+            self._sim_last_render_at[key] = now
+            handle = self._sim_debug_handles.get(key)
+            if handle is None:
+                return
+            shown_points = np.asarray(points, dtype=np.float32).reshape(-1, 3)
+            shown_colors = np.asarray(colors, dtype=np.uint8).reshape(-1, 3)
+            # Viser/WebGL clients can retain an old GPU allocation when the
+            # new cloud loses only a small subset of vertices (the exact case
+            # when a hand occludes a cube). Recreate this one bounded 8k-point
+            # simulator layer so the browser contains exactly this depth frame.
+            visible = bool(
+                self._show_sim_world.value if world else self._show_sim_raw.value
+            )
+            handle.remove()
+            handle = self.server.scene.add_point_cloud(
+                "/sim_debug/world/cloud"
+                if world
+                else "/sim_debug/camera_optical/raw_cloud",
+                points=shown_points,
+                colors=shown_colors,
+                point_size=self.config.point_size,
+                point_shape="rounded",
+                precision="float16",
+                visible=visible,
+            )
+            self._sim_debug_handles[key] = handle
+            self._sim_debug_frame_index[key] += 1
+            if self._sim_debug_status is not None:
+                self._sim_debug_status.content = (
+                    f"**3D SAFETY RGB-D BACKPROJECTION · CURRENT FRAME "
+                    f"{self._sim_debug_frame_index[key]:,}** · "
+                    f"{key}: **{len(shown_points):,} points** · "
+                    f"**{rate_hz:.1f} Hz** · no history · metres"
+                )
+
+    def _refresh_sim_debug_visibility(self) -> None:
+        with self._lock:
+            self._refresh_sim_debug_visibility_locked()
+
+    def _refresh_sim_debug_visibility_locked(self) -> None:
+        if not self._sim_debug_handles:
+            return
+        self._sim_debug_handles["world"].visible = bool(self._show_sim_world.value)
+        self._sim_debug_handles["raw"].visible = bool(self._show_sim_raw.value)
+        geometry = bool(self._show_sim_geometry.value)
+        for key in ("root", "camera", "table", "tag"):
+            self._sim_debug_handles[key].visible = geometry
+
+    def update_edge_obstacle_cloud(
+        self,
+        points: np.ndarray,
+        colors: np.ndarray | None = None,
+        frame_id: str = "",
+    ) -> None:
+        """Overlay the controller-facing extracted obstacle cloud in 3D."""
+
+        values = np.asarray(points, dtype=np.float32).reshape(-1, 3)
+        valid = np.isfinite(values).all(axis=1)
+        values = values[valid]
+        shown_colors = (
+            None
+            if colors is None
+            else np.asarray(colors, dtype=np.uint8).reshape(-1, 3)[valid]
+        )
+        with self._lock:
+            if self._closed:
+                return
+            now = time.monotonic()
+            if self._edge_last_input_at > 0.0:
+                interval = now - self._edge_last_input_at
+                if interval > 0.0:
+                    measured_rate = 1.0 / interval
+                    self._edge_input_rate_hz = (
+                        measured_rate
+                        if self._edge_input_rate_hz <= 0.0
+                        else 0.85 * self._edge_input_rate_hz + 0.15 * measured_rate
+                    )
+            self._edge_last_input_at = now
+            if self._sim_debug_enabled:
+                # EdgeTAM outputs points in the message's declared tracking
+                # frame.  Gazebo uses ROS optical coordinates, so transform
+                # those measured RGB-D points into the same world frame as the
+                # robot and live environment cloud before drawing them.
+                if len(values) and frame_id != "world":
+                    rotation = np.asarray(
+                        self._sim_debug_local["world_from_optical"], dtype=np.float32
+                    )
+                    translation = np.asarray(
+                        self._sim_debug_local["camera_position"], dtype=np.float32
+                    )
+                    values = values @ rotation.T + translation
+                centered = values
+            else:
+                # Legacy physical-camera reconstruction coordinates are
+                # x-right/y-forward/z-down while this viewer is z-up.
+                if len(values):
+                    values = values.copy()
+                    values[:, 2] *= -1.0
+                centered = values if self._center is None else values - self._center
+            self._edge_foreground_status.content = (
+                f"Extracted obstacles: **{len(values):,} points** · "
+                f"**LIVE {self._edge_input_rate_hz:.1f} Hz** · "
+                f"`{frame_id or 'unknown'}`"
+            )
+            if self._center is None and not self._sim_debug_enabled:
+                self._edge_obstacle_points = values
+                return
+            if len(centered) == 0:
+                held_for = now - self._edge_last_nonempty_at
+                if (
+                    self._edge_obstacle_handle is not None
+                    and self._edge_last_nonempty_at > 0.0
+                    and held_for < self._edge_visual_hold_sec
+                ):
+                    self._edge_foreground_status.content = (
+                        "Extracted obstacles: **temporary detector gap · "
+                        f"HOLD {held_for:.2f}/{self._edge_visual_hold_sec:.2f}s**"
+                    )
+                    return
+                self._edge_obstacle_points = values
+                if self._edge_obstacle_handle is not None:
+                    # Removing and recreating the Viser node is intentional.
+                    # Some WebGL clients keep the previous GPU buffer when a
+                    # point-cloud update has zero vertices.
+                    self._edge_obstacle_handle.remove()
+                    self._edge_obstacle_handle = None
+                self._update_bev_edge_cloud_locked()
+                return
+            self._edge_last_nonempty_at = now
+            self._edge_obstacle_points = values
+            if now - self._edge_last_render_at < self._edge_render_interval_sec:
+                return
+            self._edge_last_render_at = now
+            if shown_colors is None or len(shown_colors) != len(centered):
+                shown_colors = np.tile(
+                    np.array([[255, 45, 85]], dtype=np.uint8),
+                    (len(centered), 1),
+                )
+            if self._edge_obstacle_handle is None:
+                self._edge_obstacle_handle = self.server.scene.add_point_cloud(
+                    "/edgetam/foreground_obstacles",
+                    points=centered,
+                    colors=shown_colors,
+                    # Dense current-frame RGB-D points already describe the
+                    # hand surface. Oversized splats visually merged them into
+                    # a much larger obstacle than the measured geometry.
+                    point_size=self.config.point_size * 1.25,
+                    point_shape="rounded",
+                    precision="float16",
+                    visible=(
+                        self._show_edge_foreground.value
+                        and not self._bev_enabled
+                    ),
+                )
+            else:
+                self._edge_obstacle_handle.points = centered
+                self._edge_obstacle_handle.colors = shown_colors
+                self._edge_obstacle_handle.visible = (
+                    self._show_edge_foreground.value and not self._bev_enabled
+                )
+            self._update_bev_edge_cloud_locked()
+
+    def _update_metric_bev(
+        self,
+        frame: PointCloudFrame,
+        points: np.ndarray,
+        colors: np.ndarray,
+    ) -> None:
+        """Update the separately derived plane-coordinate cloud and BEV map."""
+
+        if not self._bev_enabled:
+            return
+        if (
+            self._requires_apriltag_anchor
+            and self._last_apriltag_scale is None
+            and frame.apriltag_scale_correction is None
+        ):
+            self._bev_status.content = (
+                "等待 8×8 cm AprilTag 後再鎖定工作平面… / "
+                "Waiting for metric tag before fitting work plane…"
+            )
+            return
+        if self._bev_calibration is None or self._bev_recalibrate_requested:
+            try:
+                self._bev_calibration = fit_metric_bev(frame.pointmap)
+                self._bev_recalibrate_requested = False
+                self._camera_fitted_clients.clear()
+                LOGGER.info(
+                    "Metric BEV work plane locked: inliers=%d (%.1f%%) "
+                    "rms=%.1fmm normal=(%.3f, %.3f, %.3f)",
+                    self._bev_calibration.inlier_count,
+                    self._bev_calibration.inlier_ratio * 100.0,
+                    self._bev_calibration.rms_error_m * 1000.0,
+                    *self._bev_calibration.normal,
+                )
+            except ValueError as exc:
+                self._bev_status.content = (
+                    "⚠️ 工作平面尚未鎖定 / Work plane not locked  \n"
+                    f"`{exc}`"
+                )
+                return
+
+        calibration = self._bev_calibration
+        assert calibration is not None
+        bev_points = calibration.project(points)
+        finite = np.isfinite(bev_points).all(axis=1)
+        bev_points = bev_points[finite]
+        bev_colors = colors[finite]
+        u0, u1, v0, v1 = calibration.bounds_uv
+        inside = (
+            (bev_points[:, 0] >= u0)
+            & (bev_points[:, 0] <= u1)
+            & (bev_points[:, 1] >= v0)
+            & (bev_points[:, 1] <= v1)
+            & (bev_points[:, 2] >= -0.05)
+            & (bev_points[:, 2] <= 0.75)
+        )
+        bev_points = bev_points[inside]
+        bev_colors = bev_colors[inside]
+        if self._bev_cloud_handle is None:
+            self._bev_cloud_handle = self.server.scene.add_point_cloud(
+                "/metric_bev/orthorectified_pointcloud",
+                points=bev_points,
+                colors=bev_colors,
+                point_size=self.config.point_size,
+                point_shape="rounded",
+                precision="float16",
+                visible=self._bev_enabled,
+            )
+        else:
+            self._bev_cloud_handle.points = bev_points
+            self._bev_cloud_handle.colors = bev_colors
+            self._bev_cloud_handle.visible = self._bev_enabled
+
+        self._update_bev_edge_cloud_locked()
+        self._update_apriltag_locked(frame, calibration)
+        preview = rasterize_metric_bev(
+            calibration,
+            points,
+            colors,
+            obstacle_height_m=self._bev_obstacle_height_m,
+            edge_points=self._edge_obstacle_points,
+        )
+        self._bev_preview.image = preview
+        tilt = float(
+            np.degrees(np.arccos(np.clip(calibration.normal[2], -1.0, 1.0)))
+        )
+        if frame.apriltag_locked and frame.apriltag_scale_correction is not None:
+            tag_line = (
+                f"  \n🟧 **APRILTAG #{frame.apriltag_id} SCALE LOCK** · "
+                f"physical side **{(frame.apriltag_size_m or 0.0) * 100.0:.1f} cm** · "
+                f"correction **{frame.apriltag_scale_correction:.4f}×** · "
+                f"age **{frame.apriltag_age_frames or 0} frames**"
+            )
+        elif self._apriltag_center_work is not None:
+            tag_line = (
+                "  \n🟨 **APRILTAG ANCHOR HOLD** · temporary detection loss; "
+                "task-plane pose remains at the last verified lock"
+            )
+        else:
+            tag_line = "  \n🟠 **等待 8×8 cm AprilTag 尺度鎖定 / waiting for tag**"
+        self._bev_status.content = (
+            "✅ **實體工作平面已鎖定 / Metric plane locked**  \n"
+            f"RANSAC: **{calibration.inlier_count:,}** points "
+            f"({calibration.inlier_ratio:.0%}) · RMS "
+            f"**{calibration.rms_error_m * 1000.0:.1f} mm** · "
+            f"mount tilt **{tilt:.1f}°**  \n"
+            "紅色＝高於平面的候選障礙；粉紅＝目前幀障礙輸出。  \n"
+            "工作平面與 AprilTag 原點保持鎖定，僅手動重新校正才會改變。"
+            + tag_line
+        )
+        if self._bev_enabled and self._camera_fitted_clients == set():
+            self._fit_bev_camera_locked()
+
+    def _update_apriltag_locked(
+        self,
+        frame: PointCloudFrame,
+        calibration: MetricBevCalibration,
+    ) -> None:
+        corners_xyz = frame.apriltag_corners_xyz
+        if not frame.apriltag_locked or corners_xyz is None:
+            # A temporarily occluded tag is not evidence that the physical
+            # table moved. Keep the last spatial anchor and plane instead of
+            # clearing them and automatically fitting a different plane when
+            # the tag becomes visible again.
+            for key, handle in self._apriltag_handles.items():
+                handle.visible = self._bev_enabled
+                if key == "label" and self._apriltag_center_work is not None:
+                    handle.text = "APRILTAG ANCHOR · HOLD (last verified pose)"
+            return
+        corners = calibration.project(corners_xyz)
+        if len(corners) != 4 or not np.isfinite(corners).all():
+            return
+        if self._apriltag_corners_work is None:
+            physical_center = np.mean(corners, axis=0)
+            physical_center[2] = 0.0
+            self._apriltag_center_work = physical_center.astype(np.float32)
+            self._apriltag_corners_work = corners.astype(np.float32).copy()
+        # Keep the first verified tag pose as the world origin. Per-frame
+        # monocular depth jitter otherwise moves OpenArm and its work grid even
+        # though the fixed camera, tag and robot have not physically moved.
+        corners = self._apriltag_corners_work.astype(np.float32).copy()
+        # Lift the calibration graphic slightly above the fitted tabletop so
+        # it remains visible through dense point sprites.
+        corners[:, 2] = np.maximum(corners[:, 2], 0.012)
+        center = np.mean(corners, axis=0)
+        center[2] = 0.016
+        closed = np.concatenate((corners, corners[:1]), axis=0)
+        segments = np.stack((closed[:-1], closed[1:]), axis=1).astype(np.float32)
+        colors = np.tile(
+            np.asarray([[(255, 130, 20), (255, 130, 20)]], dtype=np.uint8),
+            (4, 1, 1),
+        )
+        key = "outline"
+        if key not in self._apriltag_handles:
+            self._apriltag_handles[key] = self.server.scene.add_line_segments(
+                "/metric_bev/apriltag/physical_8cm_outline",
+                points=segments,
+                colors=colors,
+                line_width=5.0,
+            )
+        else:
+            self._apriltag_handles[key].points = segments
+            self._apriltag_handles[key].visible = self._bev_enabled
+        key = "center"
+        if key not in self._apriltag_handles:
+            self._apriltag_handles[key] = self.server.scene.add_icosphere(
+                "/metric_bev/apriltag/center",
+                radius=0.012,
+                color=(255, 130, 20),
+                subdivisions=2,
+                position=center,
+            )
+        else:
+            self._apriltag_handles[key].position = center
+            self._apriltag_handles[key].visible = self._bev_enabled
+        key = "label"
+        size_cm = (frame.apriltag_size_m or 0.08) * 100.0
+        text = f"APRILTAG #{frame.apriltag_id} · {size_cm:.1f} cm · SCALE LOCK"
+        if key not in self._apriltag_handles:
+            self._apriltag_handles[key] = self.server.scene.add_label(
+                "/metric_bev/apriltag/label",
+                text,
+                position=center + np.array((0.0, 0.0, 0.03), np.float32),
+                anchor="bottom-center",
+                font_size_mode="screen",
+                font_screen_scale=0.8,
+                depth_test=False,
+            )
+        else:
+            self._apriltag_handles[key].text = text
+            self._apriltag_handles[key].position = center + np.array(
+                (0.0, 0.0, 0.03), np.float32
+            )
+            self._apriltag_handles[key].visible = self._bev_enabled
+
+    def _update_bev_edge_cloud_locked(self) -> None:
+        calibration = self._bev_calibration
+        if calibration is None:
+            return
+        bev_points = calibration.project(self._edge_obstacle_points)
+        if not len(bev_points):
+            if self._bev_edge_handle is not None:
+                self._bev_edge_handle.remove()
+                self._bev_edge_handle = None
+            return
+        colors = np.tile(
+            np.array([[255, 30, 105]], dtype=np.uint8),
+            (len(bev_points), 1),
+        )
+        if self._bev_edge_handle is None:
+            self._bev_edge_handle = self.server.scene.add_point_cloud(
+                "/metric_bev/edgetam_obstacles",
+                points=bev_points,
+                colors=colors,
+                point_size=self.config.point_size * 1.25,
+                point_shape="rounded",
+                precision="float16",
+                visible=(
+                    self._bev_enabled and self._show_edge_foreground.value
+                ),
+            )
+        else:
+            self._bev_edge_handle.points = bev_points
+            self._bev_edge_handle.colors = colors
+            self._bev_edge_handle.visible = (
+                self._bev_enabled and self._show_edge_foreground.value
+            )
+
+    def _fit_bev_camera_locked(self) -> None:
+        calibration = self._bev_calibration
+        if calibration is None:
+            return
+        u0, u1, v0, v1 = self._bev_view_bounds_locked()
+        look_at = np.array(
+            ((u0 + u1) * 0.5, (v0 + v1) * 0.5, 0.0), dtype=np.float64
+        )
+        span = max(u1 - u0, v1 - v0, 0.4)
+        position = look_at + np.array((0.0, 0.0, 1.15 * span))
+        self.server.initial_camera.position = position
+        self.server.initial_camera.look_at = look_at
+        self.server.initial_camera.up = (0.0, 1.0, 0.0)
+        for client in self.server.get_clients().values():
+            with client.atomic():
+                client.camera.position = position
+                client.camera.look_at = look_at
+                client.camera.up_direction = (0.0, 1.0, 0.0)
+                client.camera.fov = np.deg2rad(55.0)
+            self._camera_fitted_clients.add(client.client_id)
 
     def update_people(
         self,
@@ -317,6 +1109,19 @@ class ReconstructionScene3D:
                 obstacles,
                 robot_arm,
             )
+            self._update_bev_obstacles_locked(obstacles)
+            if self._openarm is not None:
+                display_obstacles: list[tuple[int, str, np.ndarray]] = []
+                for track in obstacles:
+                    position = np.asarray(track.position_xyz, dtype=np.float32)
+                    if self._bev_enabled and self._bev_calibration is not None:
+                        position = self._bev_calibration.project(position[None, :])[0]
+                    else:
+                        position = position - self._center
+                    display_obstacles.append(
+                        (track.track_id, track.class_name, position)
+                    )
+                self._openarm.update_obstacles(display_obstacles)
 
             for key in list(people_handles):
                 if key not in active:
@@ -331,6 +1136,68 @@ class ReconstructionScene3D:
                 "Pink dot = stable 3D center · green arrow = confirmed consistent motion"
             )
             self._refresh_visibility_locked()
+
+    def _update_bev_obstacles_locked(
+        self, obstacles: list[Track3DState]
+    ) -> None:
+        active: set[str] = set()
+        calibration = self._bev_calibration
+        if calibration is not None:
+            for track in obstacles:
+                minimum = np.asarray(track.bbox3d.minimum, dtype=np.float32)
+                maximum = np.asarray(track.bbox3d.maximum, dtype=np.float32)
+                corners = np.asarray(
+                    [
+                        (x, y, z)
+                        for x in (minimum[0], maximum[0])
+                        for y in (minimum[1], maximum[1])
+                        for z in (minimum[2], maximum[2])
+                    ],
+                    dtype=np.float32,
+                )
+                projected = calibration.project(corners)
+                shown_minimum = projected.min(axis=0)
+                shown_maximum = projected.max(axis=0)
+                center = (shown_minimum + shown_maximum) * 0.5
+                dimensions = np.maximum(shown_maximum - shown_minimum, 0.02)
+                box_key = f"box:{track.track_id}"
+                if box_key not in self._bev_obstacle_handles:
+                    self._bev_obstacle_handles[box_key] = self.server.scene.add_box(
+                        f"/metric_bev/tracked_obstacles/{track.track_id}/bbox",
+                        color=_obstacle_color(track.class_name),
+                        dimensions=dimensions,
+                        wireframe=True,
+                        position=center,
+                    )
+                else:
+                    handle = self._bev_obstacle_handles[box_key]
+                    handle.dimensions = dimensions
+                    handle.position = center
+                active.add(box_key)
+
+                label_key = f"label:{track.track_id}"
+                label_position = center + np.array(
+                    (0.0, 0.0, dimensions[2] * 0.55), dtype=np.float32
+                )
+                text = f"#{track.track_id} · {track.class_name}"
+                if label_key not in self._bev_obstacle_handles:
+                    self._bev_obstacle_handles[label_key] = self.server.scene.add_label(
+                        f"/metric_bev/tracked_obstacles/{track.track_id}/label",
+                        text,
+                        position=label_position,
+                        anchor="bottom-center",
+                        font_size_mode="screen",
+                        font_screen_scale=0.8,
+                        depth_test=False,
+                    )
+                else:
+                    handle = self._bev_obstacle_handles[label_key]
+                    handle.text = text
+                    handle.position = label_position
+                active.add(label_key)
+        for key in list(self._bev_obstacle_handles):
+            if key not in active:
+                self._bev_obstacle_handles.pop(key).remove()
 
     def _update_robot_relationship(
         self,
@@ -481,22 +1348,152 @@ class ReconstructionScene3D:
         elif label == "Tracking Points":
             self._show_tracking.value = visible
 
+    def update_openarm_joint_state(
+        self,
+        names: tuple[str, ...],
+        positions: tuple[float, ...],
+        *,
+        received_at: float | None = None,
+        header_stamp: float = 0.0,
+    ) -> int:
+        if self._openarm is None:
+            return 0
+        return self._openarm.update_joint_state(
+            names,
+            positions,
+            received_at=received_at,
+            header_stamp=header_stamp,
+        )
+
+    def openarm_robot_state(self, timestamp: float) -> RobotArmState | None:
+        if self._openarm is None:
+            return None
+        return self._openarm.robot_arm_state(timestamp)
+
+    def set_view_correction(
+        self,
+        pitch_down_deg: float,
+        roll_deg: float,
+        yaw_deg: float,
+    ) -> None:
+        """Compatibility no-op: manual Euler rotation is not BEV correction."""
+
+        values = np.asarray(
+            (pitch_down_deg, roll_deg, yaw_deg), dtype=np.float64
+        )
+        if not np.isfinite(values).all():
+            raise ValueError("View correction angles must be finite")
+        self.recalibrate_metric_bev()
+
+    def set_metric_bev_enabled(self, enabled: bool) -> None:
+        """Switch between untouched camera coordinates and derived BEV."""
+
+        with self._lock:
+            if self._closed:
+                return
+            self._bev_enabled = bool(enabled)
+            self.config.metric_bev_enabled = self._bev_enabled
+            self._frames_root.visible = not self._bev_enabled
+            self._edge_root.visible = not self._bev_enabled
+            self._bev_root.visible = self._bev_enabled
+            if self._openarm is not None:
+                self._openarm.set_spatial_context(
+                    center=self._center,
+                    bev_enabled=self._bev_enabled,
+                    calibration=self._bev_calibration,
+                    apriltag_center_work=self._apriltag_center_work,
+                    apriltag_locked=self._apriltag_center_work is not None,
+                )
+            self._refresh_visibility_locked()
+            if self._bev_enabled and self._bev_calibration is not None:
+                self._fit_bev_camera_locked()
+
+    def set_metric_bev_height_threshold(self, height_m: float) -> None:
+        value = float(height_m)
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError("BEV obstacle height must be finite and non-negative")
+        with self._lock:
+            self._bev_obstacle_height_m = value
+            self.config.metric_bev_obstacle_height_m = value
+
+    def recalibrate_metric_bev(self) -> None:
+        """Request a fresh RANSAC fit on the next reconstructed point map."""
+
+        with self._lock:
+            self._bev_calibration = None
+            self._bev_recalibrate_requested = True
+            self._apriltag_center_work = None
+            self._apriltag_corners_work = None
+            self._last_apriltag_scale = None
+            for handle in self._apriltag_handles.values():
+                handle.visible = False
+            self._bev_status.content = (
+                "等待下一幀重新估計工作平面… / Waiting for next frame…"
+            )
+
+    def set_top_down_view(self) -> None:
+        """Enable the mathematical BEV and look orthogonally at its plane."""
+
+        with self._lock:
+            if self._closed:
+                return
+            self.set_metric_bev_enabled(True)
+            self._top_down_view = True
+            self._camera_fitted_clients.clear()
+            if self._bev_calibration is not None:
+                self._fit_bev_camera_locked()
+
     def reset(self) -> None:
         with self._lock:
             for handles in self._frames.values():
                 self._remove_frame_handles(handles)
             self._frames.clear()
+            if self._edge_obstacle_handle is not None:
+                self._edge_obstacle_handle.remove()
+                self._edge_obstacle_handle = None
+            if self._bev_cloud_handle is not None:
+                self._bev_cloud_handle.remove()
+                self._bev_cloud_handle = None
+            if self._bev_edge_handle is not None:
+                self._bev_edge_handle.remove()
+                self._bev_edge_handle = None
+            for handle in self._bev_obstacle_handles.values():
+                handle.remove()
+            self._bev_obstacle_handles.clear()
+            for handle in self._apriltag_handles.values():
+                handle.remove()
+            self._apriltag_handles.clear()
+            self._apriltag_center_work = None
+            self._apriltag_corners_work = None
+            self._last_apriltag_scale = None
+            self._edge_obstacle_points = np.empty((0, 3), dtype=np.float32)
+            self._bev_calibration = None
+            self._bev_recalibrate_requested = True
             self._center = None
             self._camera_pose = None
+            self._top_down_view = False
             self._camera_fitted_clients.clear()
             self._timestep.max = 0
             self._timestep.value = 0
             self._timestep.disabled = True
             self._frame_status.content = "Waiting for a reconstructed frame…"
             self._people_status.content = "Waiting for aligned YOLO obstacle masks…"
+            self._edge_foreground_status.content = (
+                "Extracted obstacles: **0 points**"
+            )
             self._relationship_status.content = (
                 "Waiting for the anchored green Koch arm…"
             )
+            self._bev_status.content = (
+                "正在估計實體工作平面… / Estimating physical work plane…"
+            )
+            if self._openarm is not None:
+                self._openarm.update_obstacles([])
+                self._openarm.set_spatial_context(
+                    center=None,
+                    bev_enabled=self._bev_enabled,
+                    calibration=None,
+                )
 
     def close(self) -> None:
         with self._lock:
@@ -504,11 +1501,16 @@ class ReconstructionScene3D:
                 return
             self.reset()
             self._frames_root.remove()
+            self._edge_root.remove()
+            self._bev_root.remove()
+            if self._openarm is not None:
+                self._openarm.close()
             for control in self._controls:
                 control.remove()
             self._folder.remove()
             self._people_folder.remove()
             self._relationship_folder.remove()
+            self._bev_folder.remove()
             self._closed = True
 
     def _on_follow_latest(self) -> None:
@@ -534,6 +1536,22 @@ class ReconstructionScene3D:
             self._refresh_visibility_locked()
 
     def _refresh_visibility_locked(self) -> None:
+        if self._edge_obstacle_handle is not None:
+            self._edge_obstacle_handle.visible = (
+                self._show_edge_foreground.value and not self._bev_enabled
+            )
+        if self._bev_edge_handle is not None:
+            self._bev_edge_handle.visible = (
+                self._show_edge_foreground.value and self._bev_enabled
+            )
+        for key, handle in self._bev_obstacle_handles.items():
+            if key.startswith("box:"):
+                handle.visible = self._bev_enabled and self._show_person_boxes.value
+            elif key.startswith("label:"):
+                handle.visible = self._bev_enabled and self._show_person_labels.value
+        self._frames_root.visible = not self._bev_enabled
+        self._edge_root.visible = not self._bev_enabled
+        self._bev_root.visible = self._bev_enabled
         if not self._frames:
             return
         selected = int(np.clip(self._timestep.value, 0, len(self._frames) - 1))
@@ -583,13 +1601,53 @@ class ReconstructionScene3D:
         with self._lock:
             if self._camera_pose is None or client.client_id in self._camera_fitted_clients:
                 return
+            if self._bev_enabled and self._bev_calibration is not None:
+                u0, u1, v0, v1 = self._bev_view_bounds_locked()
+                look_at = np.array(
+                    ((u0 + u1) * 0.5, (v0 + v1) * 0.5, 0.0),
+                    dtype=np.float64,
+                )
+                span = max(u1 - u0, v1 - v0, 0.4)
+                position = look_at + np.array(
+                    (0.0, 0.0, 1.15 * span), dtype=np.float64
+                )
+                with client.atomic():
+                    client.camera.position = position
+                    client.camera.look_at = look_at
+                    client.camera.up_direction = (0.0, 1.0, 0.0)
+                    client.camera.fov = np.deg2rad(55.0)
+                self._camera_fitted_clients.add(client.client_id)
+                return
             position, look_at = self._camera_pose
+            if self._top_down_view:
+                radius = max(float(np.linalg.norm(position - look_at)), 0.5)
+                position = np.array(
+                    (0.0, 0.0, 1.45 * radius), dtype=np.float64
+                )
+                look_at = np.zeros(3, dtype=np.float64)
             with client.atomic():
                 client.camera.position = position
                 client.camera.look_at = look_at
-                client.camera.up_direction = (0.0, 0.0, 1.0)
+                client.camera.up_direction = (
+                    (0.0, 1.0, 0.0)
+                    if self._top_down_view
+                    else (0.0, 0.0, 1.0)
+                )
                 client.camera.fov = np.deg2rad(55.0)
             self._camera_fitted_clients.add(client.client_id)
+
+    def _bev_view_bounds_locked(self) -> tuple[float, float, float, float]:
+        """Include the calibrated cloud, OpenArm base, and 1.2 m work grid."""
+
+        assert self._bev_calibration is not None
+        u0, u1, v0, v1 = self._bev_calibration.bounds_uv
+        if self._openarm is not None:
+            base_x, base_y, _ = self._openarm.config.base_position_xyz
+            u0 = min(u0, float(base_x) - 0.12, -0.60)
+            u1 = max(u1, float(base_x) + 0.12, 0.60)
+            v0 = min(v0, float(base_y) - 0.12, -0.60)
+            v1 = max(v1, float(base_y) + 0.12, 0.60)
+        return float(u0), float(u1), float(v0), float(v1)
 
 
 def _robust_center(points: np.ndarray) -> np.ndarray:
@@ -597,6 +1655,49 @@ def _robust_center(points: np.ndarray) -> np.ndarray:
     interior = np.all((points >= low) & (points <= high), axis=1)
     selected = points[interior] if interior.any() else points
     return np.mean(selected, axis=0, dtype=np.float64).astype(np.float32)
+
+
+def _view_correction_quaternion(
+    pitch_down_deg: float,
+    roll_deg: float,
+    yaw_deg: float,
+) -> np.ndarray:
+    """Return a normalized Viser wxyz display quaternion.
+
+    Coordinates are x-right/y-forward/z-up. A positive physical downward
+    camera pitch therefore needs a negative rotation around +x to recover a
+    level workcell. Roll is around the forward (+y) axis and yaw around +z.
+    """
+
+    values = np.asarray(
+        (pitch_down_deg, roll_deg, yaw_deg), dtype=np.float64
+    )
+    if not np.isfinite(values).all():
+        raise ValueError("View correction angles must be finite")
+
+    def axis_angle(axis: tuple[float, float, float], degrees: float) -> np.ndarray:
+        half = np.deg2rad(float(degrees)) * 0.5
+        xyz = np.asarray(axis, dtype=np.float64) * np.sin(half)
+        return np.array((np.cos(half), *xyz), dtype=np.float64)
+
+    def multiply(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+        lw, lx, ly, lz = left
+        rw, rx, ry, rz = right
+        return np.array(
+            (
+                lw * rw - lx * rx - ly * ry - lz * rz,
+                lw * rx + lx * rw + ly * rz - lz * ry,
+                lw * ry - lx * rz + ly * rw + lz * rx,
+                lw * rz + lx * ry - ly * rx + lz * rw,
+            ),
+            dtype=np.float64,
+        )
+
+    pitch = axis_angle((1.0, 0.0, 0.0), -values[0])
+    roll = axis_angle((0.0, 1.0, 0.0), values[1])
+    yaw = axis_angle((0.0, 0.0, 1.0), values[2])
+    result = multiply(yaw, multiply(roll, pitch))
+    return result / max(float(np.linalg.norm(result)), 1e-12)
 
 
 def _obstacle_color(class_name: str) -> tuple[int, int, int]:

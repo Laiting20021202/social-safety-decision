@@ -5,20 +5,37 @@ from typing import Any
 
 import numpy as np
 
-from realtime_safety.config import GuiConfig
+from realtime_safety.config import GuiConfig, OpenArmConfig
+from realtime_safety.gui.openarm_scene import OpenArmScene
 from realtime_safety.pipeline.local_planner import PlannerResult
 from realtime_safety.pipeline.traversable_region import TraversableRegion
-from realtime_safety.types import DangerZone, PointCloudFrame, SafetyLevel, Track3DState
+from realtime_safety.types import (
+    DangerZone,
+    PointCloudFrame,
+    RobotArmState,
+    SafetyLevel,
+    Track3DState,
+)
 
 
 class Scene3D:
     """Persistent Viser scene. Updating data never writes client camera state."""
 
-    def __init__(self, server: Any, config: GuiConfig) -> None:
+    def __init__(
+        self,
+        server: Any,
+        config: GuiConfig,
+        openarm_config: OpenArmConfig | None = None,
+    ) -> None:
         self.server = server
         self.config = config
         self._lock = threading.Lock()
         self._handles: dict[str, Any] = {}
+        self._openarm = (
+            OpenArmScene(server, openarm_config)
+            if openarm_config is not None and openarm_config.enabled
+            else None
+        )
         self.server.scene.set_up_direction("+z")
         self._handles["ground_grid"] = self.server.scene.add_grid(
             "/world/ground_grid",
@@ -40,6 +57,7 @@ class Scene3D:
             color=(0, 230, 230),
             opacity=0.6,
             position=(0.0, 0.0, 0.02),
+            visible=self._openarm is None,
         )
         empty = np.zeros((0, 3), dtype=np.float32)
         self._handles["point_cloud"] = self.server.scene.add_point_cloud(
@@ -73,6 +91,10 @@ class Scene3D:
             tracking_handle.points = (
                 np.asarray(tracking, dtype=np.float32) if tracking is not None else np.zeros((0, 3), dtype=np.float32)
             )
+            if self._openarm is not None:
+                self._openarm.set_spatial_context(
+                    center=None, bev_enabled=False, calibration=None
+                )
 
     def set_visibility(self, label: str, visible: bool) -> None:
         mapping = {
@@ -131,6 +153,33 @@ class Scene3D:
             for key in list(self._handles):
                 if (key.startswith(managed_prefixes) or key == arrows_key) and key not in active:
                     self._handles.pop(key).remove()
+            if self._openarm is not None:
+                self._openarm.update_obstacles(
+                    (track.track_id, track.class_name, track.position_xyz)
+                    for track in tracks
+                )
+
+    def update_openarm_joint_state(
+        self,
+        names: tuple[str, ...],
+        positions: tuple[float, ...],
+        *,
+        received_at: float | None = None,
+        header_stamp: float = 0.0,
+    ) -> int:
+        if self._openarm is None:
+            return 0
+        return self._openarm.update_joint_state(
+            names,
+            positions,
+            received_at=received_at,
+            header_stamp=header_stamp,
+        )
+
+    def openarm_robot_state(self, timestamp: float) -> RobotArmState | None:
+        if self._openarm is None:
+            return None
+        return self._openarm.robot_arm_state(timestamp)
 
     def update_navigation(self, traversable: TraversableRegion, planner: PlannerResult) -> None:
         with self._lock:
@@ -248,6 +297,8 @@ class Scene3D:
 
     def close(self) -> None:
         with self._lock:
+            if self._openarm is not None:
+                self._openarm.close()
             for handle in self._handles.values():
                 handle.remove()
             self._handles.clear()

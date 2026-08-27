@@ -71,6 +71,14 @@ class PointCloudFrame:
     metric_scale: float | None = None
     reference_depth_m: float | None = None
     reference_observed_depth: float | None = None
+    apriltag_locked: bool = False
+    apriltag_id: int | None = None
+    apriltag_size_m: float | None = None
+    apriltag_observed_edge_m: float | None = None
+    apriltag_scale_correction: float | None = None
+    apriltag_center_xyz: np.ndarray | None = None
+    apriltag_corners_xyz: np.ndarray | None = None
+    apriltag_age_frames: int | None = None
 
 
 @dataclass(slots=True)
@@ -85,6 +93,10 @@ class RobotArmState:
     confidence: float
     timestamp: float
     held_frames: int = 0
+    localization_source: str = "rgb_depth"
+    # Optional named FK points (for example left_tcp/right_tcp).  The legacy
+    # center remains the midpoint so existing consumers stay compatible.
+    link_points_xyz: dict[str, np.ndarray] | None = None
 
 
 @dataclass(slots=True)

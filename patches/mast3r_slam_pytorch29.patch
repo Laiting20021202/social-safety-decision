@@ -1,0 +1,58 @@
+diff --git a/mast3r_slam/backend/src/gn_kernels.cu b/mast3r_slam/backend/src/gn_kernels.cu
+index bf2d588..af04131 100644
+--- a/mast3r_slam/backend/src/gn_kernels.cu
++++ b/mast3r_slam/backend/src/gn_kernels.cu
+@@ -799,7 +799,7 @@ std::vector<torch::Tensor> gauss_newton_points_cuda(
+ 
+     // Termination criteria
+     // Need to specify this second argument otherwise ambiguous function call...
+-    delta_norm = torch::linalg::linalg_norm(dx, std::optional<c10::Scalar>(), {}, false, {});
++    delta_norm = dx.norm();
+     if (delta_norm.item<float>() < delta_thresh) {
+       break;
+     }
+@@ -1216,7 +1216,7 @@ std::vector<torch::Tensor> gauss_newton_rays_cuda(
+ 
+     // Termination criteria
+     // Need to specify this second argument otherwise ambiguous function call...
+-    delta_norm = torch::linalg::linalg_norm(dx, std::optional<c10::Scalar>(), {}, false, {});
++    delta_norm = dx.norm();
+     if (delta_norm.item<float>() < delta_thresh) {
+       break;
+     }
+@@ -1626,7 +1626,7 @@ std::vector<torch::Tensor> gauss_newton_calib_cuda(
+ 
+     // Termination criteria
+     // Need to specify this second argument otherwise ambiguous function call...
+-    delta_norm = torch::linalg::linalg_norm(dx, std::optional<c10::Scalar>(), {}, false, {});
++    delta_norm = dx.norm();
+     if (delta_norm.item<float>() < delta_thresh) {
+       break;
+     }
+@@ -1635,4 +1635,4 @@ std::vector<torch::Tensor> gauss_newton_calib_cuda(
+   }
+ 
+   return {dx}; // For debugging
+-}
+\ No newline at end of file
++}
+diff --git a/mast3r_slam/backend/src/matching_kernels.cu b/mast3r_slam/backend/src/matching_kernels.cu
+index 288fa4c..c4fe931 100644
+--- a/mast3r_slam/backend/src/matching_kernels.cu
++++ b/mast3r_slam/backend/src/matching_kernels.cu
+@@ -100,7 +100,7 @@ std::vector<torch::Tensor> refine_matches_cuda(
+   torch::Tensor p1_new = torch::zeros(
+     {batch_size, n, 2}, opts);
+ 
+-  AT_DISPATCH_FLOATING_TYPES_AND_HALF(D11.type(), "refine_matches_kernel", ([&] {
++  AT_DISPATCH_FLOATING_TYPES_AND_HALF(D11.scalar_type(), "refine_matches_kernel", ([&] {
+     refine_matches_kernel<scalar_t><<<blocks, threads>>>(
+       D11.packed_accessor32<scalar_t,4,torch::RestrictPtrTraits>(),
+       D21.packed_accessor32<scalar_t,3,torch::RestrictPtrTraits>(),
+@@ -313,4 +313,4 @@ std::vector<torch::Tensor> iter_proj_cuda(
+ 
+   return {p_new, converged};
+ 
+-}
+\ No newline at end of file
++}

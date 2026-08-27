@@ -109,13 +109,15 @@ class RobotSelfFilter:
     ) -> RobotArmState | None:
         """Project the anchored green robot component into the 3D pointmap."""
 
+        if self.config.robot_prefer_fixed_center:
+            return self._configured_arm_state(frame)
         mask = self._last_core_mask
         if mask is None or not np.any(mask) or cloud.pointmap.size == 0:
-            return self._hold_arm_state(frame.source_timestamp)
+            return self._hold_or_fixed_arm_state(frame)
 
         ys, xs = np.nonzero(mask)
         if len(xs) < 20:
-            return self._hold_arm_state(frame.source_timestamp)
+            return self._hold_or_fixed_arm_state(frame)
         center_xy = np.array((float(xs.mean()), float(ys.mean())), dtype=np.float32)
         height, width = cloud.pointmap.shape[:2]
         sample_mask = cv2.resize(
@@ -127,7 +129,7 @@ class RobotSelfFilter:
         valid &= (cloud.pointmap[..., 1] > 0.05) & (cloud.pointmap[..., 1] < 4.0)
         points = np.asarray(cloud.pointmap[valid], dtype=np.float32).reshape(-1, 3)
         if len(points) < 12:
-            return self._hold_arm_state(frame.source_timestamp)
+            return self._hold_or_fixed_arm_state(frame)
 
         forward = points[:, 1]
         median_depth = float(np.median(forward))
@@ -135,7 +137,7 @@ class RobotSelfFilter:
         depth_gate = max(3.5 * 1.4826 * mad, 0.04)
         points = points[np.abs(forward - median_depth) <= depth_gate]
         if len(points) < 12:
-            return self._hold_arm_state(frame.source_timestamp)
+            return self._hold_or_fixed_arm_state(frame)
         measured = np.median(points, axis=0).astype(np.float32)
         previous = self._last_arm_state
         if previous is not None:
@@ -170,6 +172,45 @@ class RobotSelfFilter:
         self._center_held_frames = 0
         return state
 
+    def _hold_or_fixed_arm_state(
+        self,
+        frame: FramePacket,
+    ) -> RobotArmState | None:
+        held = self._hold_arm_state(frame.source_timestamp)
+        if held is not None:
+            return held
+        return self._configured_arm_state(frame)
+
+    def _configured_arm_state(
+        self,
+        frame: FramePacket,
+    ) -> RobotArmState | None:
+        configured = self.config.robot_fixed_center_xyz
+        if configured is None:
+            return None
+        center = np.asarray(configured, dtype=np.float32).reshape(3)
+        normalized_xy = np.asarray(
+            self.config.robot_fixed_center_xy,
+            dtype=np.float32,
+        ).reshape(2)
+        center_xy = normalized_xy * np.asarray(
+            (frame.original_width, frame.original_height),
+            dtype=np.float32,
+        )
+        return RobotArmState(
+            center_xyz=center,
+            center_xy=center_xy,
+            image_size=(frame.original_width, frame.original_height),
+            mask_pixels=0,
+            point_count=0,
+            confidence=float(self.config.robot_fixed_center_confidence),
+            timestamp=float(frame.source_timestamp),
+            # Mark the configured reference as retained/non-visual. The wire
+            # contract therefore never calls it a fresh RGB measurement.
+            held_frames=1,
+            localization_source="configured_reference",
+        )
+
     def _hold_arm_state(self, timestamp: float) -> RobotArmState | None:
         previous = self._last_arm_state
         if (
@@ -189,6 +230,7 @@ class RobotSelfFilter:
             confidence=max(0.05, previous.confidence * 0.92),
             timestamp=float(timestamp),
             held_frames=self._center_held_frames,
+            localization_source=previous.localization_source,
         )
         self._last_arm_state = held
         return held

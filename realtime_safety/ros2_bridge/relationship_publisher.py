@@ -23,6 +23,11 @@ def _coordinate_xyz(
         # Internal reconstruction is x-right/y-forward/z-up. Koch VAMP uses
         # x-right/y-forward/z-down.
         xyz[2] *= -1.0
+    elif coordinate_mode == "ros_optical":
+        # Internal x-right/y-forward/z-up -> REP-103 optical
+        # x-right/y-down/z-forward.
+        xyz = xyz[[0, 2, 1]]
+        xyz[1] *= -1.0
     return xyz
 
 
@@ -47,7 +52,11 @@ def build_relationship_payload(
 ) -> dict[str, Any]:
     """Build the stable, versioned JSON contract consumed by the Koch NUC."""
 
-    if coordinate_mode not in {"internal_z_up", "camera_y_forward"}:
+    if coordinate_mode not in {
+        "internal_z_up",
+        "camera_y_forward",
+        "ros_optical",
+    }:
         raise ValueError(f"Unsupported relationship coordinate mode: {coordinate_mode}")
 
     arm_valid = bool(
@@ -64,6 +73,16 @@ def build_relationship_payload(
         if arm_internal is not None
         else None
     )
+    named_arm_internal: dict[str, np.ndarray] = {}
+    if arm_valid and robot_arm is not None and robot_arm.link_points_xyz:
+        for name, value in robot_arm.link_points_xyz.items():
+            point = np.asarray(value, dtype=np.float32).reshape(3)
+            if np.isfinite(point).all():
+                named_arm_internal[str(name)] = point
+    named_arm_wire = {
+        name: _coordinate_xyz(value, coordinate_mode)
+        for name, value in named_arm_internal.items()
+    }
 
     obstacle_payloads: list[dict[str, Any]] = []
     for track in tracks:
@@ -89,7 +108,14 @@ def build_relationship_payload(
             "motion_state": str(track.motion_state),
         }
         if arm_internal is not None and arm_wire is not None:
-            delta_internal = center_internal - arm_internal
+            if named_arm_internal:
+                nearest_arm_name, relation_arm = min(
+                    named_arm_internal.items(),
+                    key=lambda item: float(np.linalg.norm(center_internal - item[1])),
+                )
+            else:
+                nearest_arm_name, relation_arm = "center", arm_internal
+            delta_internal = center_internal - relation_arm
             delta_wire = _coordinate_xyz(delta_internal, coordinate_mode)
             center_distance = float(np.linalg.norm(delta_internal))
             planar_distance = float(np.linalg.norm(delta_internal[:2]))
@@ -102,6 +128,7 @@ def build_relationship_payload(
                         0.0,
                         center_distance - max(float(track.radius), 0.0),
                     ),
+                    "nearest_arm_point": nearest_arm_name,
                 }
             )
         else:
@@ -111,6 +138,7 @@ def build_relationship_payload(
                     "center_distance_m": None,
                     "planar_distance_m": None,
                     "surface_clearance_m": None,
+                    "nearest_arm_point": None,
                 }
             )
         obstacle_payloads.append(relation)
@@ -129,6 +157,7 @@ def build_relationship_payload(
             "class_name": obstacle_payloads[0]["class_name"],
             "center_distance_m": obstacle_payloads[0]["center_distance_m"],
             "surface_clearance_m": obstacle_payloads[0]["surface_clearance_m"],
+            "nearest_arm_point": obstacle_payloads[0]["nearest_arm_point"],
         }
         if obstacle_payloads and arm_valid
         else None
@@ -153,6 +182,8 @@ def build_relationship_payload(
         "coordinate_convention": (
             "x_right_y_forward_z_down_m"
             if coordinate_mode == "camera_y_forward"
+            else "x_right_y_down_z_forward_m"
+            if coordinate_mode == "ros_optical"
             else "x_right_y_forward_z_up_m"
         ),
         "published_at_unix_sec": time.time(),
@@ -164,9 +195,20 @@ def build_relationship_payload(
         "arm": (
             {
                 "center_m": _xyz_object(arm_wire),
+                "tcp_centers_m": {
+                    name: _xyz_object(value)
+                    for name, value in named_arm_wire.items()
+                },
                 "confidence": float(robot_arm.confidence),
                 "held_frames": int(robot_arm.held_frames),
                 "fresh_measurement": bool(robot_arm.held_frames == 0),
+                "localization_source": (
+                    robot_arm.localization_source
+                    if getattr(robot_arm, "localization_source", "")
+                    else "configured_reference"
+                    if robot_arm.mask_pixels == 0 and robot_arm.point_count == 0
+                    else "rgb_depth"
+                ),
             }
             if arm_valid and robot_arm is not None and arm_wire is not None
             else None
@@ -194,7 +236,11 @@ class ArmObstacleRelationshipPublisher:
             )
         if max_rate_hz is not None and max_rate_hz <= 0:
             raise ValueError("Relationship publication rate must be positive")
-        if coordinate_mode not in {"internal_z_up", "camera_y_forward"}:
+        if coordinate_mode not in {
+            "internal_z_up",
+            "camera_y_forward",
+            "ros_optical",
+        }:
             raise ValueError(
                 f"Unsupported relationship coordinate mode: {coordinate_mode}"
             )

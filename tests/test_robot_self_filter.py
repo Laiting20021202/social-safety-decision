@@ -208,3 +208,35 @@ def test_robot_center_is_projected_and_temporally_held() -> None:
     assert held is not None
     assert held.held_frames == 1
     np.testing.assert_allclose(held.center_xyz, state.center_xyz)
+
+
+def test_configured_arm_reference_is_used_when_robot_is_not_visible() -> None:
+    image = np.full((240, 320, 3), 90, dtype=np.uint8)
+    frame = _frame(image, 5)
+    cloud = PointCloudFrame(
+        points=np.empty((0, 3), dtype=np.float32),
+        colors=np.empty((0, 3), dtype=np.uint8),
+        confidence=np.empty(0, dtype=np.float32),
+        pointmap=np.empty((0, 0, 3), dtype=np.float32),
+        frame_index=5,
+        timestamp=0.5,
+        anchor_frame_index=0,
+        inference_ms=0.0,
+        valid=False,
+        source="test",
+    )
+    config = _config()
+    config.robot_fixed_center_xyz = (0.0, 0.40, 0.02)
+    config.robot_fixed_center_xy = (0.535, 0.52)
+    config.robot_fixed_center_confidence = 0.55
+    self_filter = RobotSelfFilter(config)
+
+    state = self_filter.estimate_arm_state(frame, cloud)
+
+    assert state is not None
+    np.testing.assert_allclose(state.center_xyz, (0.0, 0.40, 0.02))
+    np.testing.assert_allclose(state.center_xy, (171.2, 124.8))
+    assert state.confidence == 0.55
+    assert state.held_frames == 1
+    assert state.mask_pixels == 0
+    assert state.point_count == 0

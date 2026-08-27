@@ -22,6 +22,11 @@ class ReferenceDepthCalibrator:
         percentile: float = 20.0,
         warmup_frames: int = 8,
         ema_alpha: float = 0.08,
+        adaptation_frames: int = 12,
+        spatial_tolerance: float = 0.05,
+        min_spatial_support: float = 0.75,
+        candidate_stability_tolerance: float = 0.025,
+        max_update_fraction: float = 0.025,
     ) -> None:
         self.target_depth_m = float(target_depth_m)
         self.roi = tuple(float(value) for value in roi)
@@ -29,6 +34,15 @@ class ReferenceDepthCalibrator:
         self.warmup_frames = int(warmup_frames)
         self.ema_alpha = float(ema_alpha)
         self._candidates: deque[float] = deque(maxlen=self.warmup_frames)
+        self.adaptation_frames = max(1, int(adaptation_frames))
+        self.spatial_tolerance = float(spatial_tolerance)
+        self.min_spatial_support = float(min_spatial_support)
+        self.candidate_stability_tolerance = float(candidate_stability_tolerance)
+        self.max_update_fraction = float(max_update_fraction)
+        self._warmup_depths: deque[np.ndarray] = deque(maxlen=self.warmup_frames)
+        self._adaptation_candidates: deque[float] = deque(maxlen=self.adaptation_frames)
+        self._reference_template: np.ndarray | None = None
+        self._reference_scale: float | None = None
         self.scale: float | None = None
         self.observed_depth: float | None = None
         self.ready = False
@@ -53,28 +67,151 @@ class ReferenceDepthCalibrator:
         if not np.isfinite(candidate) or candidate <= 0:
             return self.scale if self.scale is not None else 1.0
 
-        # Once initialized, a hand or person passing over the reference ROI
-        # must not abruptly rescale the entire world.
-        if self.ready and self.scale is not None:
-            ratio = candidate / self.scale
-            if ratio < 0.65 or ratio > 1.35:
-                return self.scale
+        if not self.ready:
+            if self._warmup_depths and self._warmup_depths[0].shape != values.shape:
+                self._candidates.clear()
+                self._warmup_depths.clear()
+            self.observed_depth = observed
+            self._candidates.append(candidate)
+            self._warmup_depths.append(
+                np.where(
+                    np.isfinite(values) & (values > 0.05),
+                    values,
+                    np.nan,
+                ).astype(np.float32)
+            )
+            robust_candidate = float(np.median(self._candidates))
+            self.scale = robust_candidate
+            self.ready = len(self._candidates) >= self.warmup_frames
+            if self.ready:
+                depth_stack = np.ma.masked_invalid(np.stack(self._warmup_depths, axis=0))
+                self._reference_template = np.ma.median(depth_stack, axis=0).filled(np.nan).astype(np.float32)
+                self._reference_scale = self.scale
+                self._adaptation_candidates.clear()
+            return self.scale
+
+        assert self.scale is not None
+        # ``ema_alpha == 0`` is an explicit request to freeze the startup
+        # calibration.  Do not even accumulate pending drift while frozen.
+        if self.ema_alpha <= 0.0:
+            return self.scale
+
+        spatial_candidate = self._spatial_scale_candidate(values)
+        if spatial_candidate is None:
+            self._adaptation_candidates.clear()
+            return self.scale
+        candidate, observed = spatial_candidate
+
+        # A large step is much more likely to be an occluder or a changed
+        # reference object than model-scale drift.  Keep the historical guard
+        # in addition to the spatial and temporal checks below.
+        ratio = candidate / self.scale
+        if ratio < 0.65 or ratio > 1.35:
+            self._adaptation_candidates.clear()
+            return self.scale
 
         self.observed_depth = observed
-        self._candidates.append(candidate)
-        robust_candidate = float(np.median(self._candidates))
-        if self.scale is None or not self.ready:
-            self.scale = robust_candidate
-        else:
-            # Bound each accepted update as a second guard against artificial
-            # scene motion, then follow slow model-scale drift with an EMA.
-            bounded = float(np.clip(robust_candidate, self.scale * 0.9, self.scale * 1.1))
-            self.scale = (1.0 - self.ema_alpha) * self.scale + self.ema_alpha * bounded
-        self.ready = len(self._candidates) >= self.warmup_frames
+        if self._adaptation_candidates:
+            pending = float(np.median(self._adaptation_candidates))
+            if abs(candidate / pending - 1.0) > self.candidate_stability_tolerance:
+                self._adaptation_candidates.clear()
+        self._adaptation_candidates.append(candidate)
+        if len(self._adaptation_candidates) < self.adaptation_frames:
+            return self.scale
+
+        robust_candidate = float(np.median(self._adaptation_candidates))
+        relative_spread = np.abs(
+            np.asarray(self._adaptation_candidates, dtype=np.float64) / robust_candidate - 1.0
+        )
+        if float(np.max(relative_spread)) > self.candidate_stability_tolerance:
+            self._adaptation_candidates.clear()
+            return self.scale
+
+        # Even alpha=1 cannot move the global point cloud by more than the
+        # configured fraction in one accepted frame.  With the normal small
+        # EMA this deliberately takes many corroborated frames to re-anchor.
+        bounded = float(
+            np.clip(
+                robust_candidate,
+                self.scale * (1.0 - self.max_update_fraction),
+                self.scale * (1.0 + self.max_update_fraction),
+            )
+        )
+        self.scale = (1.0 - self.ema_alpha) * self.scale + self.ema_alpha * bounded
         return self.scale
+
+    def _spatial_scale_candidate(self, depth: np.ndarray) -> tuple[float, float] | None:
+        """Return a scale only when the full view supports one depth ratio.
+
+        A Video Depth Anything scale drift multiplies essentially every valid
+        scene pixel by the same factor. A hand crossing even the entire metric
+        reference ROI changes only a spatial subset of the image, so it cannot
+        re-anchor the world unless the surrounding fixed scene corroborates
+        the same ratio.
+        """
+        template = self._reference_template
+        reference_scale = self._reference_scale
+        if template is None or reference_scale is None or template.shape != depth.shape:
+            return None
+
+        matched = (
+            np.isfinite(template)
+            & (template > 0.05)
+            & np.isfinite(depth)
+            & (depth > 0.05)
+        )
+        if int(np.count_nonzero(matched)) < 32:
+            return None
+
+        ratios = depth[matched].astype(np.float64) / template[matched].astype(np.float64)
+        depth_ratio = float(np.median(ratios))
+        if not np.isfinite(depth_ratio) or depth_ratio <= 0.0:
+            return None
+        inlier = np.abs(ratios / depth_ratio - 1.0) <= self.spatial_tolerance
+        if float(np.mean(inlier)) < self.min_spatial_support:
+            return None
+
+        # Pixel support alone can be concentrated in one part of the ROI.
+        # Requiring agreement across a small grid makes a local foreground
+        # patch unable to masquerade as a global monocular-depth scale change.
+        height, width = depth.shape
+        y_edges = np.linspace(0, height, 5, dtype=np.int32)
+        x_edges = np.linspace(0, width, 5, dtype=np.int32)
+        cell_agreement: list[bool] = []
+        for row in range(4):
+            for column in range(4):
+                cell_match = matched[
+                    y_edges[row] : y_edges[row + 1],
+                    x_edges[column] : x_edges[column + 1],
+                ]
+                if int(np.count_nonzero(cell_match)) < 2:
+                    continue
+                cell_depth = depth[
+                    y_edges[row] : y_edges[row + 1],
+                    x_edges[column] : x_edges[column + 1],
+                ]
+                cell_template = template[
+                    y_edges[row] : y_edges[row + 1],
+                    x_edges[column] : x_edges[column + 1],
+                ]
+                cell_ratio = float(
+                    np.median(cell_depth[cell_match] / cell_template[cell_match])
+                )
+                cell_agreement.append(abs(cell_ratio / depth_ratio - 1.0) <= self.spatial_tolerance)
+        if len(cell_agreement) < 4 or float(np.mean(cell_agreement)) < self.min_spatial_support:
+            return None
+
+        scale_candidate = reference_scale / depth_ratio
+        if not np.isfinite(scale_candidate) or scale_candidate <= 0.0:
+            return None
+        return scale_candidate, self.target_depth_m / scale_candidate
 
     def reset(self) -> None:
         self._candidates.clear()
+        self._warmup_depths.clear()
+        self._adaptation_candidates.clear()
+        self._reference_template = None
+        self._reference_scale = None
         self.scale = None
         self.observed_depth = None
         self.ready = False

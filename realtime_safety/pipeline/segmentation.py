@@ -8,6 +8,10 @@ import cv2
 import numpy as np
 
 from realtime_safety.config import SegmentationConfig
+from realtime_safety.edgetam_tracker.hand_semantic_gate import (
+    MediaPipeHandDetector,
+    MediaPipeHandDetectorConfig,
+)
 from realtime_safety.types import Detection2D, FramePacket
 from realtime_safety.utils.timing import CudaEventTimer
 
@@ -84,6 +88,7 @@ class UltralyticsSegmentationBackend(SegmentationBackend):
         self.model = None
         self.names: dict[int, str] = {}
         self.last_gpu_ms = 0.0
+        self.hand_detector: MediaPipeHandDetector | None = None
 
     def load(self) -> None:
         import torch
@@ -99,6 +104,33 @@ class UltralyticsSegmentationBackend(SegmentationBackend):
         if hasattr(self.model, "model") and hasattr(self.model.model, "fuse"):
             self.model.model.float().fuse(verbose=False)
         self.names = dict(self.model.names)
+        if self.config.hand_only:
+            self.hand_detector = MediaPipeHandDetector(
+                MediaPipeHandDetectorConfig(
+                    maximum_hands=self.config.hand_maximum_hands,
+                    minimum_detection_confidence=(
+                        self.config.hand_minimum_detection_confidence
+                    ),
+                    minimum_tracking_confidence=(
+                        self.config.hand_minimum_tracking_confidence
+                    ),
+                    model_complexity=self.config.hand_model_complexity,
+                    mask_padding_pixels=self.config.hand_mask_padding_px,
+                    temporal_hold_frames=(
+                        self.config.hand_temporal_hold_frames
+                    ),
+                    temporal_confidence_decay=(
+                        self.config.hand_temporal_confidence_decay
+                    ),
+                    minimum_flow_points=(
+                        self.config.hand_minimum_flow_points
+                    ),
+                    maximum_flow_error=(
+                        self.config.hand_maximum_flow_error
+                    ),
+                )
+            )
+            self.hand_detector.load()
         LOGGER.info("Loaded %s on %s", self.config.model, self.device)
 
     def warmup(self) -> None:
@@ -149,7 +181,48 @@ class UltralyticsSegmentationBackend(SegmentationBackend):
     def track_obstacles(self, frame: FramePacket) -> list[Detection2D]:
         """Track all accepted obstacle classes with one persistent ByteTrack state."""
 
-        return self._track_classes(frame, self.OBSTACLE_CLASSES)
+        if not self.config.hand_only:
+            return self._track_classes(frame, self.OBSTACLE_CLASSES)
+        if self.hand_detector is None:
+            raise RuntimeError("hand-only YOLO mode has no loaded hand detector")
+        # COCO YOLO checkpoints do not contain a hand class. The persistent
+        # YOLO result was previously discarded unconditionally after a full
+        # model inference. Avoid that pure overhead in hand-only mode and use
+        # the shared hand landmarker directly. The timestamp-aware 2D/3D
+        # trackers in the scheduler still provide ID, velocity and occlusion
+        # persistence for this selectable fallback path.
+        hand_regions = self.hand_detector.infer_rgb(frame.rgb)
+        detections: list[Detection2D] = []
+        for region in hand_regions:
+            mask = (
+                None
+                if region.mask is None
+                else np.asarray(region.mask, dtype=bool)
+            )
+            if mask is None or not mask.any():
+                continue
+            rows, columns = np.nonzero(mask)
+            centroid = np.asarray(
+                (float(np.median(columns)), float(np.median(rows))),
+                dtype=np.float32,
+            )
+            detections.append(
+                Detection2D(
+                    bbox_xyxy=region.bbox_xyxy.astype(np.float32),
+                    class_id=-1,
+                    class_name="hand",
+                    confidence=float(region.confidence),
+                    centroid_xy=centroid,
+                    timestamp=frame.source_timestamp,
+                    mask=mask,
+                    is_prediction=bool(region.is_prediction),
+                    # The local timestamp-aware tracker assigns a hand ID.
+                    # Reusing a YOLO person ID would conflate two hands.
+                    track_id=None,
+                    image_size=(frame.original_width, frame.original_height),
+                )
+            )
+        return detections
 
     def _track_classes(
         self,
@@ -243,8 +316,14 @@ class UltralyticsSegmentationBackend(SegmentationBackend):
             reset = getattr(tracker, "reset", None)
             if callable(reset):
                 reset()
+        if self.hand_detector is not None:
+            self.hand_detector.close()
+            self.hand_detector.load()
 
     def close(self) -> None:
+        if self.hand_detector is not None:
+            self.hand_detector.close()
+            self.hand_detector = None
         self.model = None
         try:
             import torch

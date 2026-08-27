@@ -8,6 +8,10 @@ from typing import Any
 
 import numpy as np
 
+from realtime_safety.ros2_bridge.stamps import (
+    exact_source_timestamp_or_now,
+    source_timestamp_or_now,
+)
 from realtime_safety.types import PointCloudFrame
 
 LOGGER = logging.getLogger(__name__)
@@ -30,13 +34,23 @@ def _pack_rgb_points(
     """Pack x/y/z and 0xRRGGBB into a PointCloud2-compatible byte buffer."""
 
     points = np.asarray(points, dtype=np.float32).reshape(-1, 3)
-    if coordinate_mode not in {"internal_z_up", "camera_y_forward"}:
+    if coordinate_mode not in {
+        "internal_z_up",
+        "camera_y_forward",
+        "ros_optical",
+    }:
         raise ValueError(f"Unsupported point-cloud coordinate mode: {coordinate_mode}")
     if coordinate_mode == "camera_y_forward" and len(points):
         # Internal reconstruction uses z-up. Koch VAMP's camera_y_forward
         # contract is x-right, y-forward/depth, z-down.
         points = points.copy()
         points[:, 2] *= -1.0
+    elif coordinate_mode == "ros_optical" and len(points):
+        # Internal reconstruction is x-right/y-forward/z-up. REP-103 optical
+        # is x-right/y-down/z-forward.
+        points = np.column_stack(
+            (points[:, 0], -points[:, 2], points[:, 1])
+        ).astype(np.float32, copy=False)
     colors = np.asarray(colors, dtype=np.uint8).reshape(-1, 3)
     count = min(len(points), len(colors))
     points, colors = points[:count], colors[:count]
@@ -65,6 +79,7 @@ class PointCloudTopicPublisher:
         max_rate_hz: float | None = None,
         publish_empty: bool = False,
         coordinate_mode: str = "internal_z_up",
+        preserve_source_timestamp: bool = False,
     ) -> None:
         if not topic.startswith("/") or any(char.isspace() for char in topic):
             raise ValueError("Point-cloud topic must be an absolute ROS name without whitespace")
@@ -75,9 +90,14 @@ class PointCloudTopicPublisher:
             raise ValueError("Point-cloud publication rate must be positive")
         self.max_rate_hz = max_rate_hz
         self.publish_empty = bool(publish_empty)
-        if coordinate_mode not in {"internal_z_up", "camera_y_forward"}:
+        if coordinate_mode not in {
+            "internal_z_up",
+            "camera_y_forward",
+            "ros_optical",
+        }:
             raise ValueError(f"Unsupported point-cloud coordinate mode: {coordinate_mode}")
         self.coordinate_mode = coordinate_mode
+        self.preserve_source_timestamp = bool(preserve_source_timestamp)
         self._minimum_interval = 0.0 if max_rate_hz is None else 1.0 / max_rate_hz
         self._last_publish_time = 0.0
         self._diagnostic_window_start = 0.0
@@ -193,7 +213,12 @@ class PointCloudTopicPublisher:
         if count == 0 and not self.publish_empty:
             return
         message = PointCloud2()
-        message.header.stamp = self._node.get_clock().now().to_msg()
+        stamp_converter = (
+            exact_source_timestamp_or_now
+            if self.preserve_source_timestamp
+            else source_timestamp_or_now
+        )
+        message.header.stamp = stamp_converter(self._node, cloud.timestamp)
         message.header.frame_id = self.frame_id
         message.height = 1
         message.width = count

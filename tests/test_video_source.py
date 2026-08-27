@@ -6,6 +6,7 @@ import pytest
 
 from realtime_safety.pipeline import video_source as video_source_module
 from realtime_safety.pipeline.video_source import CameraDevice, PlaybackState, VideoSource, discover_cameras
+from realtime_safety.ros2_bridge.image_subscriber import normalize_camera_qos
 
 
 class FakeCapture:
@@ -203,7 +204,7 @@ def test_ros2_image_topic_is_a_live_latest_frame_source(monkeypatch) -> None:
 
     capture = FakeRosCapture()
     monkeypatch.setattr(video_source_module, "_open_ros2_capture", lambda topic: capture)
-    source = VideoSource("ros2:///koch_remote/camera/image_raw")
+    source = VideoSource("ros2:///custom/camera/image_raw")
 
     source.open()
     frame = source.read()
@@ -213,7 +214,7 @@ def test_ros2_image_topic_is_a_live_latest_frame_source(monkeypatch) -> None:
     assert source.is_ros2_stream
     assert source.is_remote_stream
     assert source.is_live
-    assert source.ros2_topic == "/koch_remote/camera/image_raw"
+    assert source.ros2_topic == "/custom/camera/image_raw"
     assert frame is not None
     assert frame.frame_index == 0
     assert frame.source_timestamp == 123.5
@@ -226,3 +227,11 @@ def test_ros2_image_topic_is_a_live_latest_frame_source(monkeypatch) -> None:
 def test_ros2_image_topic_must_be_absolute() -> None:
     with pytest.raises(ValueError, match="absolute"):
         VideoSource("ros2://relative/image")
+
+
+def test_ros2_camera_qos_defaults_to_isaac_compatible_sensor_data() -> None:
+    assert normalize_camera_qos(None) == "sensor_data"
+    assert normalize_camera_qos("best-effort") == "best_effort"
+    assert normalize_camera_qos("reliable") == "reliable"
+    with pytest.raises(ValueError, match="Unsupported camera QoS"):
+        normalize_camera_qos("transient_local")

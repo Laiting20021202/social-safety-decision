@@ -55,12 +55,24 @@ class StableTracker2D:
         iou = bbox_iou(predicted, detection.bbox_xyxy)
         scale = max(np.linalg.norm(predicted[2:] - predicted[:2]), 1.0)
         distance = np.linalg.norm((predicted[:2] + predicted[2:]) * 0.5 - detection.centroid_xy) / scale
+        if (
+            iou < self.config.iou_threshold
+            and distance > self.config.association_distance
+        ):
+            return float("inf")
         # COCO labels commonly alternate between person/chair/bag around a
         # partially occluded obstacle. A small class-change penalty preserves
         # spatial identity while the vote hysteresis below prevents one noisy
         # label from changing the published obstacle class.
-        class_penalty = 0.0 if track.class_name == detection.class_name else 0.25
-        return (1.0 - iou) + 0.25 * float(distance) + class_penalty
+        class_penalty = 0.0 if track.class_name == detection.class_name else 0.15
+        normalized_distance = float(
+            distance / max(self.config.association_distance, 1e-6)
+        )
+        return (
+            0.70 * (1.0 - iou)
+            + 0.30 * min(normalized_distance, 2.0)
+            + class_penalty
+        )
 
     def update(self, detections: list[Detection2D], timestamp: float) -> list[Detection2D]:
         track_ids = list(self._tracks)
@@ -71,9 +83,14 @@ class StableTracker2D:
                 [[self._cost(self._tracks[track_id], det) for det in detections] for track_id in track_ids],
                 dtype=np.float32,
             )
-            rows, columns = linear_sum_assignment(costs)
+            rows, columns = linear_sum_assignment(
+                np.where(np.isfinite(costs), costs, 1e6)
+            )
             for row, column in zip(rows, columns):
-                if costs[row, column] > 1.0 - self.config.iou_threshold + 0.4:
+                if (
+                    not np.isfinite(costs[row, column])
+                    or costs[row, column] > 1.10
+                ):
                     continue
                 track_id = track_ids[row]
                 track = self._tracks[track_id]
