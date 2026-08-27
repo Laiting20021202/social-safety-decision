@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>openarm_sim_evaluator</name>
+  <version>0.1.0</version>
+  <description>Metrics, trajectory, event, and ground-truth evaluator for OpenArm simulation.</description>
+  <maintainer email="openarm-sim@example.invalid">OpenArm simulation maintainers</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>rosgraph_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>
+

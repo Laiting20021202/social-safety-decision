@@ -1,0 +1,72 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 20; 20; 22
+    Fixed Frame: world
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Metric Grid
+      Enabled: true
+      Plane: XY
+      Cell Size: 0.1
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: false
+      Show Axes: true
+      Show Arrows: true
+    - Class: rviz_default_plugins/RobotModel
+      Name: Official OpenArm
+      Enabled: true
+      Description Topic:
+        Value: /robot_description
+      Visual Enabled: true
+      Collision Enabled: false
+    - Class: rviz_default_plugins/Image
+      Name: Gazebo RGB
+      Enabled: true
+      Topic:
+        Value: /rgbd/color/image_raw
+      Transport Hint: raw
+    - Class: rviz_default_plugins/Image
+      Name: Gazebo Depth 32FC1 meter
+      Enabled: true
+      Topic:
+        Value: /rgbd/aligned_depth_to_color/image_raw
+      Transport Hint: raw
+    - Class: rviz_default_plugins/PointCloud2
+      Name: 3D Safety RGB-D Backprojection (Optical)
+      Enabled: true
+      Topic:
+        Value: /realtime_safety/pointcloud
+      Size (Pixels): 2
+      Style: Points
+      Color Transformer: RGB8
+    - Class: rviz_default_plugins/PointCloud2
+      Name: 3D Safety RGB-D Backprojection (World)
+      Enabled: true
+      Topic:
+        Value: /realtime_safety/environment_cloud_world
+      Size (Pixels): 3
+      Style: Points
+      Color Transformer: RGB8
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 2.0
+      Focal Point: -0.1; 0.1; 0.85
+      Pitch: 0.55
+      Yaw: 4.7
+Window Geometry:
+  Width: 1600
+  Height: 900

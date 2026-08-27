@@ -1,0 +1,91 @@
+schema_version: 1
+defaults:
+  start_time: 1.0
+  start_trigger_state: null
+  linear_speed: 0.01
+  hold_duration: 0.5
+  withdraw_speed: 0.3
+  repeat_count: 1
+  # World-frame bounds include the captured parked pose and the complete
+  # user-aligned table.  The GUI and Gazebo controller both consume these.
+  manual_workspace_min: [-0.65, -1.35, 0.12]
+  manual_workspace_max: [0.65, 0.75, 1.20]
+  # GUI auto-sweep moves along world Y (left/right across the camera view).
+  # X and Z are captured when the checkbox is enabled, so the hand keeps the
+  # height and depth selected by the operator in Gazebo.
+  auto_sweep_axis: y
+  # Keep the complete hand inside the calibrated 640x480 RGB-D frustum.
+  # Outside this band the detector correctly reports no hand, so sweeping
+  # farther only leaves a stale visual cloud at the image boundary.
+  auto_sweep_limits_m: [-0.22, 0.28]
+  visual_asset: assets/hand/libhand/hand.obj
+  visual_scale: [0.052, 0.052, 0.052]
+  # Present the spread palm to the user-aligned RGB-D camera.  This is the
+  # same LibHand geometry, not a detector-specific billboard.
+  visual_rpy_deg: [0.0, 0.0, 180.0]
+  collision_proxy:
+    palm_size: [0.115, 0.085, 0.030]
+    wrist_radius: 0.032
+    wrist_length: 0.16
+    # The current demo intentionally renders only the real hand mesh.  The
+    # previous cylindrical forearm pointed through the workspace and could
+    # dominate both RGB semantics and the collision box.
+    forearm_enabled: false
+    forearm_visual: false
+    forearm_visual_segments: 3
+    forearm_skin_rgba: [0.72, 0.35, 0.22, 1.0]
+    forearm_radius: 0.052
+    forearm_wrist_visual_radius: 0.036
+    forearm_elbow_radius: 0.052
+    forearm_length: 0.34
+scenarios:
+  no_obstacle:
+    # Parked pose captured from the user-aligned Gazebo scene.
+    path_waypoints: [[-0.2637850413, -1.2779037952, 1.0527128055]]
+    repeat_count: 0
+  perception_preview:
+    # Known camera-visible pose used by the one-click demo health check.  It
+    # remains a physical Gazebo hand and reaches this pose at bounded speed;
+    # no ground-truth pose is sent to the perception planner.
+    start_time: 0.0
+    path_waypoints: [[-0.10, 0.10, 0.259096]]
+    linear_speed: 0.6
+    hold_duration: 30.0
+  static_blocking:
+    start_time: 0.0
+    path_waypoints: [[-0.14, 0.10, 0.249096]]
+    linear_speed: 0.1
+    hold_duration: 30.0
+  right_side_sweep:
+    path_waypoints: [[-0.14, -0.64, 0.249096], [-0.14, 0.38, 0.249096]]
+  reach_for_cube:
+    start_trigger_state: PRE_GRASP
+    path_waypoints: [[-0.14, -0.64, 0.259096], [-0.14, 0.07, 0.159096]]
+  cross_during_transit:
+    start_trigger_state: TRANSIT
+    path_waypoints: [[-0.14, -0.64, 0.319096], [-0.14, 0.38, 0.319096]]
+  hover_near_end_effector:
+    start_trigger_state: GRASP
+    path_waypoints: [[-0.14, -0.64, 0.259096], [-0.14, 0.08, 0.199096]]
+    hold_duration: 4.0
+  sudden_intrusion:
+    start_trigger_state: TRANSIT
+    path_waypoints: [[-0.10, -0.64, 0.259096], [-0.10, 0.10, 0.259096]]
+    linear_speed: 0.6
+  intrude_and_withdraw:
+    start_trigger_state: PRE_GRASP
+    path_waypoints: [[-0.18, -0.64, 0.239096], [-0.18, 0.10, 0.179096]]
+    hold_duration: 1.0
+    withdraw_speed: 0.3
+  repeated_intrusion:
+    start_trigger_state: TRANSIT
+    path_waypoints: [[-0.08, -0.64, 0.259096], [-0.08, 0.10, 0.259096]]
+    hold_duration: 0.5
+    repeat_count: 3
+  fully_blocked:
+    start_trigger_state: TRANSIT
+    path_waypoints: [[-0.10, -0.64, 0.259096], [-0.10, 0.12, 0.259096]]
+    hold_duration: 30.0
+    linear_speed: 0.3
+
+speed_profiles_mps: [0.01, 0.02, 0.05, 0.1, 0.3, 0.6]

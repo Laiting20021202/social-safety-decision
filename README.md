@@ -44,6 +44,36 @@ bash scripts/run_koch_stream.sh
 Open `http://<host-ip>:8080/`.  The simulator and full avoidance commands are
 documented on `main` under `openarm_isaac_sim_test/README.md`.
 
+## Quick start: complete Gazebo avoidance demo (`main`)
+
+On Ubuntu 22.04 with ROS 2 Humble, Gazebo Classic, RViz and MoveIt installed:
+
+```bash
+git clone --branch main \
+  https://github.com/Laiting20021202/social-safety-decision.git
+cd social-safety-decision
+bash scripts/setup.sh
+cd openarm_isaac_sim_test
+python3 -m pip install --user -e '.[dev]'
+vcs import ros2_ws/src < dependencies.repos
+./scripts/start_gazebo_demo.sh
+```
+
+Wait for `OPENARM GAZEBO DEMO READY`, then use
+`http://<host-ip>:8080/`.  In another terminal, the repeatable moving-hand
+acceptance test is:
+
+```bash
+cd social-safety-decision/openarm_isaac_sim_test
+./scripts/run_dynamic_avoidance_test.sh
+```
+
+The detailed host prerequisites, GUI controls, topic contract, test results
+and troubleshooting guide are in
+[openarm_isaac_sim_test/README.md](openarm_isaac_sim_test/README.md).  Current
+handoff results and known limitations are recorded in
+[openarm_isaac_sim_test/docs/HANDOFF_STATUS.md](openarm_isaac_sim_test/docs/HANDOFF_STATUS.md).
+
 # Interactive Temporal 4D Viewer and Safety System
 
 The default application is a clean 4D reconstruction viewer with a focused person layer: RGB video in, temporally consistent color point clouds out, plus YOLO person masks mapped into robust 3D person centers, wireframe 3D boxes, and short direction arrows. The live viewer uses Metric Video Depth Anything Small in streaming mode, so a moving hand is estimated with temporal-attention state from earlier frames instead of an unrelated first-frame anchor. St4RTrack remains selectable. The viewer does **not** render danger volumes, ground/path planning, other object classes, or run the safety worker. The original safety pipeline remains available through the `realtime_fast`, `realtime_balanced`, `realtime_quality`, and `agx` profiles.

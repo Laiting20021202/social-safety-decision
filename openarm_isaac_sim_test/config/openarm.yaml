@@ -6,7 +6,8 @@ robot:
     usd_env: OPENARM_USD_PATH
     description_root_env: OPENARM_DESCRIPTION_ROOT
     description_root_candidates:
-      - /home/david/Desktop/laiting/itri/3d_safety_decision/realtime_3d_safety_decision/third_party/openarm_description
+      - ros2_ws/src/external/openarm_description
+      - ../third_party/openarm_description
     generated_urdf: generated/openarm_v10_bimanual.urdf
     source_repository: https://github.com/enactic/openarm_description.git
     pinned_revision: 1fba2cbc05001f05b4514120b70130b4ac06f409

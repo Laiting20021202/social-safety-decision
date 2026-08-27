@@ -1,0 +1,74 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 24; 24; 24
+    Fixed Frame: world
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Plane: XY
+      Cell Size: 0.1
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: false
+      Show Axes: true
+      Show Arrows: true
+    - Class: rviz_default_plugins/RobotModel
+      Name: OpenArm
+      Enabled: true
+      Description Topic:
+        Value: /robot_description
+      Visual Enabled: true
+      Collision Enabled: false
+    - Class: rviz_default_plugins/Image
+      Name: RGB
+      Enabled: true
+      Topic:
+        Value: /rgbd/color/image_raw
+      Transport Hint: raw
+    - Class: rviz_default_plugins/Image
+      Name: Depth 32FC1 meter
+      Enabled: true
+      Topic:
+        Value: /rgbd/depth/image_raw
+      Transport Hint: raw
+    - Class: rviz_default_plugins/PointCloud2
+      Name: 3D Safety RGB-D Point Cloud
+      Enabled: true
+      Topic:
+        Value: /realtime_safety/pointcloud
+      Size (Pixels): 2
+      Style: Points
+      Color Transformer: RGB8
+    - Class: rviz_default_plugins/Marker
+      Name: Perception Obstacle
+      Enabled: true
+      Topic:
+        Value: /perception/obstacle_marker
+    - Class: moveit_rviz_plugin/MotionPlanning
+      Name: Planning Scene
+      Enabled: true
+      Planning Scene Topic: /monitored_planning_scene
+      Robot Description: robot_description
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 2.2
+      Focal Point: 0.3; 0; 0.8
+      Pitch: 0.55
+      Yaw: 4.7
+Window Geometry:
+  Width: 1600
+  Height: 900

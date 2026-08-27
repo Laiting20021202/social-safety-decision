@@ -18,7 +18,7 @@ include = ["openarm_sim*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = [".", "ros2_ws/src/openarm_dynamic_avoidance", "ros2_ws/src/openarm_sorting_task", "ros2_ws/src/openarm_safety_bridge"]
+pythonpath = [".", "ros2_ws/src/openarm_isaac_bridge", "ros2_ws/src/openarm_sorting_task", "ros2_ws/src/hand_obstacle_controller", "ros2_ws/src/openarm_safety_bridge", "ros2_ws/src/openarm_sim_evaluator", "ros2_ws/src/openarm_perception_adapter", "ros2_ws/src/openarm_dynamic_avoidance", "ros2_ws/src/openarm_sim_bringup"]
 markers = [
   "isaac: requires Isaac Sim and a usable GPU/display or headless runtime",
   "ros: requires a sourced ROS 2 workspace",

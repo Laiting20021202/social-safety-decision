@@ -1,0 +1,59 @@
+schema_version: 1
+camera:
+  name: rgbd
+  resolution:
+    width: 640
+    height: 480
+  fps: 30
+  # Explicit world pose captured after the user aligned the Gazebo camera.
+  # It is authoritative; the derived mount fields below are documentary.
+  world_pose:
+    position: [-0.4423431158, 0.0049439408, 0.8001177311]
+    rpy_deg: [-2.0774119317, 44.1721469180, -1.0964602922]
+    source: user_aligned_gazebo_20260819
+  height_above_table: 0.7010219216
+  tilt_from_vertical_deg: 45.8278530820
+  tilt_reference: vertical_down
+  aim_at_workspace_center: true
+  horizontal_offset_to_workspace_center: 0.3023431158
+  lateral_offset: -0.1450560592
+  aim_offset: [0.0, -0.12, 0.0]
+  # Documentary fallback values when aim_at_workspace_center is false.
+  downward_pitch_deg: 44.1721469180
+  yaw_deg: -1.0964602922
+  horizontal_fov_deg: 70.0
+  near_clip: 0.1
+  far_clip: 3.0
+  depth_encoding: 32FC1
+  depth_unit: meter
+  color_frame: rgbd_color_optical_frame
+  depth_frame: rgbd_depth_optical_frame
+  link_frame: rgbd_link
+  optical_convention: REP-103_x_right_y_down_z_forward
+  topics:
+    color: /rgbd/color/image_raw
+    depth: /rgbd/depth/image_raw
+    aligned_depth: /rgbd/aligned_depth_to_color/image_raw
+    color_info: /rgbd/color/camera_info
+    depth_info: /rgbd/depth/camera_info
+    points: /rgbd/points
+    world_points: /rgbd/points_world
+    reconstructed_points: /realtime_safety/pointcloud
+    reconstructed_world_points: /realtime_safety/environment_cloud_world
+  pointcloud:
+    # Gazebo publishes one full organized 640x480 cloud for every RGB-D frame
+    # on /rgbd/points. The world derivative is spatially decimated (never
+    # temporally skipped) so Python transform + DDS + WebGL stay at camera rate.
+    fps: 15
+    pixel_stride: 4
+    world_crop_min: [-0.70, -0.65, -0.02]
+    world_crop_max: [0.65, 0.70, 1.20]
+  noise:
+    # Applied by 3d_safety_decision before image-to-point-cloud
+    # backprojection. 1.5 mm approximates the small temporal variation of a
+    # physical RGB-D sensor without hiding that this remains simulation noise.
+    enabled: true
+    depth_stddev_m: 0.0015
+    rgb_stddev_255: 0.0
+    latency_ms: 0.0
+    frame_drop_probability: 0.0

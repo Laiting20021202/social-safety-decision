@@ -8,6 +8,8 @@ log/
 results/
 worlds/*.usd
 worlds/*.usda
+gazebo/generated/*.urdf
+gazebo/worlds/*.world
 assets/openarm_cache/
 ros2_ws/src/external/
 .env

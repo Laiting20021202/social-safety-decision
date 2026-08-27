@@ -1,0 +1,24 @@
+schema_version: 1
+output_root: results
+record_rosbag: true
+screenshot_states: [HOME, GRASP, TRANSIT, PLACE, PAUSE, EMERGENCY_STOP, DONE]
+trajectory_sample_hz: 100
+scenario_timeout_sec: 180.0
+settle_time_sec: 2.0
+required_topics:
+  - /clock
+  - /joint_states
+  - /rgbd/color/image_raw
+  - /rgbd/depth/image_raw
+  - /rgbd/aligned_depth_to_color/image_raw
+  - /rgbd/color/camera_info
+  - /rgbd/depth/camera_info
+  - /rgbd/points
+  - /tf
+  - /tf_static
+metrics:
+  collision_impulse_threshold_ns: 0.2
+  dropped_cube_height_m: 0.70
+  false_stop_clearance_m: 0.40
+  success_requires_all_cubes: true
+
