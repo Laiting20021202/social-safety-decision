@@ -1,6 +1,22 @@
 # Branches, ownership and current progress
 
-Last updated: 2026-08-27
+Last updated: 2026-09-22
+
+## Current handoff: Isaac Sim migration
+
+The current `main` handoff adds the September Isaac LAN viewer work and a
+[step-by-step Isaac migration checklist](ISAAC_SIM_HANDOFF.md). The full
+Isaac perception-to-avoidance loop is **not yet accepted**. Gazebo is the
+previous integration baseline; this week's target runtime is Isaac Sim.
+The LAN viewer is RGB-only with unverified metric scale; its experimental
+joint jog remains disabled by default following the September 17 report of
+unexpected movement. Root tests: 310 passed, 1 skipped; simulation tests:
+105 passed on September 22. See the [verification report](../results/repo_handoff_2026-09-22.md).
+
+This handoff is committed on `main`. The cumulative layer branches below are
+historical architecture snapshots and have not been advanced by this update.
+Start new Isaac work from the current `main`, then integrate tested changes;
+cloning `layer/simulation-validation` alone will miss this handoff.
 
 ## Branch policy
 
@@ -83,10 +99,12 @@ MπNets or motion-policy-network model.
 `openarm_isaac_sim_test/` tree.  Generated USD, ROS build products, result
 directories and vendored repositories remain ignored.
 
-Current active runtime: Gazebo Classic + RViz + MoveIt + ROS 2 Humble.  Isaac
-Sim source and configuration remain available for regression and comparison.
-The one-click launcher, dynamic-hand test and troubleshooting commands are in
-`openarm_isaac_sim_test/README.md`.
+Previous integrated runtime: Gazebo Classic + RViz + MoveIt + ROS 2 Humble.
+The active development target is now Isaac Sim. On September 22 both local
+GUI services were inactive; no live demo is asserted by this document.
+The Gazebo one-click launcher and dynamic-hand test remain regression tools.
+Use `docs/ISAAC_SIM_HANDOFF.md` for the current Isaac work, and
+`openarm_isaac_sim_test/README.md` for historical runtime commands.
 
 ## Handoff checklist
 

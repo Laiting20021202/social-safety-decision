@@ -1,0 +1,41 @@
+name: isaac_lan
+mode: reconstruction
+people_overlay: false
+device: cuda
+# RGB-only model estimates: no aligned depth topic or surveyed scale exists.
+scale_mode: relative
+reconstruction:
+  depth_mode: video_depth
+  depth_mode_options: [video_depth, fast_depth]
+  video_depth_path: third_party/Video-Depth-Anything
+  model: depth-anything/Depth-Anything-V2-Small-hf
+  focal_length_x: 554.2562509926996
+  focal_length_y: 569.677827128413
+  principal_point_x: 320.0
+  principal_point_y: 240.0
+  apriltag_enabled: false
+  input_size: 224
+  frequency_hz: 8.0
+  fast_depth_frequency_hz: 8.0
+  max_points: 12000
+  voxel_size: 0.01
+  confidence_threshold: 0.0
+  display_confidence_threshold: 0.0
+  max_relative_depth: 30.0
+  fp16: true
+gui:
+  host: 0.0.0.0
+  port: 8080
+  presentation_mode: true
+  max_video_width: 640
+  video_fps: 15.0
+  point_size: 0.008
+  history_frames: 1
+  history_stride: 1
+  metric_bev_enabled: false
+# The Isaac joint panel is enabled separately by --isaac-joint-control.
+# No robot/cloud registration is asserted without camera extrinsics.
+openarm:
+  enabled: false
+obstacle_perception:
+  enabled: false

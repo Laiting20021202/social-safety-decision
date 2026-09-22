@@ -1,8 +1,24 @@
 # OpenArm demo handoff status
 
-Last updated: 2026-08-27
+Last updated: 2026-09-22
 
-## Current scope
+## Current handoff — Isaac migration pending
+
+This week's target is Isaac Sim with a mannequin reaching toward OpenArm and
+perception-driven avoidance. See the authoritative
+[Isaac handoff checklist](../../docs/ISAAC_SIM_HANDOFF.md) and
+[September 22 verification](../../results/repo_handoff_2026-09-22.md).
+The latest source tests pass (root: 310 passed, 1 skipped; this harness:
+105 passed). No Isaac/Gazebo runtime, control or moving-hand acceptance was
+rerun in this packaging pass. The September LAN viewer has RGB-estimated
+clouds only; the joint panel stays off after an unresolved unexpected-motion
+report. Complete mannequin assets, metric RGB-D/TF, the current pose-goal
+avoidance launch, and an Isaac-specific acceptance runner remain open work.
+
+Everything below records the **August 27 Gazebo baseline**, not a claim that
+the September Isaac migration has passed or that a service is currently running.
+
+## Historical scope (2026-08-27)
 
 The active end-to-end path is Gazebo Classic + RViz + ROS 2 Humble.  Gazebo
 publishes generic synchronized RGB-D; `realtime_3d_safety_decision` rebuilds

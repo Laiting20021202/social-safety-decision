@@ -1,7 +1,13 @@
 # OpenArm dual-target and dynamic-hand safety validation
 
+> 2026-09-22 交接：本週目標是切換到 Isaac Sim 並完成假人伸手觸發 OpenArm 迴避。
+> **Isaac 端到端驗收尚未完成**；以下 Gazebo 操作與通過紀錄屬於先前基線。
+> 請先讀 [目前進度](../README.md) 與 [Isaac 接續清單](../docs/ISAAC_SIM_HANDOFF.md)。
+> `start_gazebo_demo.sh` 是 Gazebo 入口；`start_openarm_demo.sh` 實際啟動
+> Isaac ground-truth launch，不是目前 perception 迴避的一鍵入口。
+
 This project is a deterministic OpenArm safety test harness with both Isaac Sim sources and
-a lighter, currently active Gazebo Classic + RViz runtime. The current demo moves both
+a lighter Gazebo Classic + RViz regression runtime. The historical Gazebo demo moves both
 gripper TCPs to two gravity-free target cubes edited directly in Gazebo; cube picking is
 intentionally paused. It is a
 validation environment, not a training environment, and it does not run RL, PPO, imitation
@@ -123,7 +129,7 @@ Fetch the licensed hand asset once, then launch everything from one terminal:
 
 ```bash
 python3 scripts/fetch_libhand_asset.py
-./scripts/start_openarm_demo.sh
+./scripts/start_gazebo_demo.sh
 ```
 
 This opens Gazebo and RViz and starts OpenArm controllers, MoveIt, RGB-D, the actual
@@ -361,7 +367,7 @@ results/<UTC-run-id>/
 └── rosbag/
 ```
 
-## Current verification boundary
+## Historical verification boundary (not rerun on 2026-09-22)
 
 | Capability | Status on audited host |
 |---|---|

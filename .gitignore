@@ -21,3 +21,9 @@ third_party/openarm_description/
 *.pth
 *.engine
 *.onnx
+.env
+.env.*
+!.env.example
+*.bag
+*.db3
+*.mcap

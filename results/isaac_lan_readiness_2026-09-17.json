@@ -1,0 +1,73 @@
+{
+  "checked_at": "2026-09-17T11:04:23.402555+08:00",
+  "handoff_annotation_2026_09_22": {
+    "scope": "Historical observations below are retained; not a current readiness or safety approval.",
+    "subsequent_incident": "Unexpected movement was reported later on 2026-09-17; root cause remains unconfirmed.",
+    "default_control_enabled": false,
+    "runtime_retested_on_2026_09_22": false,
+    "next_steps": "docs/ISAAC_SIM_HANDOFF.md"
+  },
+  "gui_url": "http://192.168.0.16:8080/",
+  "service": "isaac-lan-gui.service",
+  "network": {
+    "local_ip": "192.168.0.16",
+    "observed_isaac_ip": "192.168.0.18",
+    "discovery": "multicast; no fixed remote IP",
+    "domain": 0,
+    "rmw": "rmw_fastrtps_cpp",
+    "transport": "UDPv4"
+  },
+  "camera_samples_over_20_seconds": {
+    "front_compressed": 97,
+    "left_compressed": 99,
+    "right_compressed": 95,
+    "front_camera_info": 277,
+    "left_camera_info": 276,
+    "right_camera_info": 276
+  },
+  "cloud_test": {
+    "duration_seconds": 25.055,
+    "messages": 124,
+    "points_per_message": 12000,
+    "bytes_per_message": 192000,
+    "frame": "isaac_front_estimated_optical_frame",
+    "observed_hz": 4.949111953701856
+  },
+  "browser_control": {
+    "positive_jog": "已抵達 openarm_left_joint1：目標 0.0100，回饋 0.0099 rad。",
+    "negative_jog": "已抵達 openarm_left_joint1：目標 0.0006，回饋 -0.0018 rad。",
+    "page_errors": [],
+    "initial_position": 0.0,
+    "observed_min": -0.002,
+    "observed_max": 0.0122,
+    "joint_samples": 1098,
+    "clouds_during_control_test": 182
+  },
+  "final_restore": {
+    "restored_joint": "openarm_left_joint1",
+    "command": 0.0,
+    "feedback": 0.0,
+    "last_samples": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "passed": true
+  },
+  "tests": {
+    "control_camera_and_cloud": "21 passed",
+    "dashboard_scene_and_control": "35 passed"
+  },
+  "limitations": [
+    "No depth Image topic discovered; point cloud is RGB-model-estimated with unverified scale.",
+    "GUI arm jog uses 14 rotation joints; no base/gripper GUI or motion planner.",
+    "Camera-to-robot registration not established."
+  ]
+}

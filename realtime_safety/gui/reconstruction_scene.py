@@ -265,6 +265,13 @@ class ReconstructionScene3D:
             )
         )
 
+    def show_estimated_cloud_only(self) -> None:
+        """Hide controls whose RGB-D, obstacle or metric inputs are absent."""
+        self._sim_folder.visible = False
+        self._people_folder.visible = False
+        self._relationship_folder.visible = False
+        self._bev_folder.visible = False
+
     @property
     def frame_count(self) -> int:
         return len(self._frames)

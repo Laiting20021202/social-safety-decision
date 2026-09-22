@@ -277,6 +277,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Publish CameraInfo paired with --camera-preview-topic",
     )
     parser.add_argument("--ros-domain-id", type=int, help="ROS_DOMAIN_ID used by the PointCloud2 publisher")
+    parser.add_argument(
+        "--isaac-joint-control", action="store_true",
+        help="Show the Isaac Sim /joint_command arm jog panel",
+    )
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--headless", action="store_true", help="Do not launch Viser")
     parser.add_argument("--max-frames", type=int, help="Stop capture after this many frames")
@@ -404,8 +408,16 @@ def main() -> int:
             reconstruction_only=config.mode == "reconstruction",
             people_overlay=config.people_overlay,
             projection_config=config.reconstruction,
-            obstacle_model=config.segmentation.model,
-            obstacle_model_options=config.segmentation.model_options,
+            obstacle_model=(
+                config.segmentation.model
+                if config.people_overlay or config.obstacle_perception.enabled
+                else None
+            ),
+            obstacle_model_options=(
+                config.segmentation.model_options
+                if config.people_overlay or config.obstacle_perception.enabled
+                else ()
+            ),
             obstacle_backend=(
                 config.obstacle_perception.backend
                 if config.obstacle_perception.enabled
@@ -420,7 +432,7 @@ def main() -> int:
             reconstruction_method_options=(
                 config.reconstruction.depth_mode_options
             ),
-            openarm_control=config.openarm.enabled,
+            openarm_control=config.openarm.enabled and not args.isaac_joint_control,
             openarm_hand_config=(
                 simulator_configs["hand"]
                 if simulator_configs is not None
@@ -546,6 +558,26 @@ def main() -> int:
     obstacle_cloud_mux = None
     openarm_joint_bridge = None
     openarm_control_bridge = None
+    isaac_joint_panel = None
+    if dashboard is not None and args.isaac_joint_control:
+        from realtime_safety.gui.isaac_joint_control import IsaacJointControlPanel
+
+        isaac_joint_panel = IsaacJointControlPanel(
+            dashboard.server, config.openarm.urdf_path
+        )
+    if dashboard is not None and isinstance(scene, ReconstructionScene3D) and not (
+        args.rgbd_depth_topic or args.rgbd_pointcloud_topic
+        or config.people_overlay or config.obstacle_perception.enabled
+        or config.openarm.enabled
+    ):
+        scene.show_estimated_cloud_only()
+        dashboard.show_estimated_cloud_only()
+        if not args.isaac_joint_control:
+            with dashboard.server.gui.add_folder("影像與點雲", order=4):
+                dashboard.server.gui.add_markdown(
+                    "**機器人控制已停用**  \n"
+                    "目前僅接收影像並發布估計點雲。RGB 深度估計的尺度尚未校正。"
+                )
     if scene is not None and config.openarm.enabled:
         from realtime_safety.ros2_bridge.openarm_joint_state import (
             OpenArmJointStateBridge,
@@ -559,7 +591,7 @@ def main() -> int:
             )
         from realtime_safety.ros2_bridge.openarm_control import OpenArmControlBridge
 
-        openarm_control_bridge = OpenArmControlBridge(
+        openarm_control_bridge = None if args.isaac_joint_control else OpenArmControlBridge(
             on_status=(
                 dashboard.update_openarm_control_status
                 if dashboard is not None
@@ -879,6 +911,8 @@ def main() -> int:
             shutdown.wait(0.1)
     finally:
         final_cloud = pipeline.gui_state.read().pointcloud
+        if isaac_joint_panel is not None:
+            isaac_joint_panel.close()
         if rgbd_scene_bridge is not None:
             rgbd_scene_bridge.close()
         if simulator_pose_bridge is not None:

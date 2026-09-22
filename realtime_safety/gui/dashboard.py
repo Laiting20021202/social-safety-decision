@@ -221,7 +221,8 @@ class Dashboard:
                 "Camera Input" if self.presentation_mode else "Live Video",
                 order=20,
                 expand_by_default=not self.presentation_mode,
-            ):
+            ) as camera_folder:
+                self._camera_folder = camera_folder
                 label = "RGB input" if reconstruction_only else "Annotated RGB"
                 self.video = self.server.gui.add_image(
                     placeholder[..., ::-1], label=label, format="jpeg", jpeg_quality=76
@@ -234,6 +235,13 @@ class Dashboard:
             self._sidebar_resizer = self.server.gui.add_html(
                 _resizable_sidebar_bootstrap(), order=-1_000
             )
+
+    def show_estimated_cloud_only(self) -> None:
+        """Show RGB preview without metric-calibration controls."""
+        if hasattr(self, "_camera_folder"):
+            self._camera_folder.expand_by_default = True
+        if hasattr(self, "_camera_geometry_folder"):
+            self._camera_geometry_folder.visible = False
 
     def _build_overview(self) -> None:
         with self.server.gui.add_folder(
@@ -248,7 +256,7 @@ class Dashboard:
                         " / **COCO OBJECT WEIGHTS + MEDIAPIPE HAND GATE + "
                         "RGB-D → HAND CLOUD**"
                         if self._obstacle_backend_options
-                        else "**MONOCULAR RGB → DEPTH → 3D HUMAN MOTION**"
+                        else "**MONOCULAR RGB → DEPTH → 3D POINT CLOUD**"
                     )
                 )
             initial_status = (
@@ -471,7 +479,8 @@ class Dashboard:
                 "Camera Geometry / BEV 數學視角修正",
                 order=65,
                 expand_by_default=True,
-            ):
+            ) as geometry_folder:
+                self._camera_geometry_folder = geometry_folder
                 self.horizontal_fov = gui.add_slider(
                     "Horizontal FOV (deg)",
                     min=35.0,
@@ -1248,7 +1257,7 @@ class Dashboard:
                     "### 🟢 SYSTEM READY\n"
                     "**Selectable RGB + PointCloud obstacle tracking**"
                     if getattr(self, "_obstacle_backend_options", ())
-                    else "### 🟢 SYSTEM READY\n**Real-time 4D human perception**"
+                    else "### 🟢 SYSTEM READY\n**Real-time point-cloud reconstruction**"
                 )
             elif errors:
                 detail = next(iter(errors.values()))
