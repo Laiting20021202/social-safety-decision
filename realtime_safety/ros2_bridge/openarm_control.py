@@ -84,8 +84,10 @@ def validate_openarm_command(command: str, value: object | None) -> tuple[str, s
 class OpenArmControlBridge:
     """Publish validated high-level GUI requests; never publishes joint targets."""
 
-    def __init__(self, on_status: Callable[[str, str], None] | None = None) -> None:
+    def __init__(self, on_status: Callable[[str, str], None] | None = None, on_memory=None) -> None:
         self.on_status = on_status
+        self.on_memory = on_memory
+        self._memory_render_time = 0.0
         self._runtime: Any | None = None
         self._node: Any | None = None
         self._publishers: dict[str, Any] = {}
@@ -118,6 +120,10 @@ class OpenArmControlBridge:
         }
         subscriptions = [
             node.create_subscription(
+                String, "/openarm/safety/memory_status",
+                lambda message: self._status("memory", message.data), 10,
+            ),
+            node.create_subscription(
                 String,
                 "/openarm/task/state",
                 lambda message: self._status("task", message.data),
@@ -148,6 +154,13 @@ class OpenArmControlBridge:
                 10,
             ),
         ]
+        if self.on_memory is not None:
+            from sensor_msgs.msg import PointCloud2
+            from rclpy.qos import qos_profile_sensor_data
+            subscriptions.append(node.create_subscription(
+                PointCloud2, "/openarm/safety/memory_cloud", self._memory_cloud,
+                qos_profile_sensor_data,
+            ))
         runtime.add_node(node)
         self._runtime = runtime
         self._node = node
@@ -210,6 +223,16 @@ class OpenArmControlBridge:
     def _status(self, key: str, value: str) -> None:
         if self.on_status is not None:
             self.on_status(str(key), str(value))
+
+    def _memory_cloud(self, message):
+        import time
+        import numpy as np
+        from sensor_msgs_py import point_cloud2
+        if message.header.frame_id != "world" or time.monotonic() - self._memory_render_time < .25:
+            return
+        self._memory_render_time = time.monotonic()
+        rows = point_cloud2.read_points(message, field_names=("x", "y", "z"), skip_nans=True)
+        self.on_memory(np.column_stack([rows[name] for name in ("x", "y", "z")]))
 
     def close(self) -> None:
         if self._node is None:

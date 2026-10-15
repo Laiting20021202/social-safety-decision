@@ -1,0 +1,42 @@
+{
+  "terminal_state": "IDLE_EVADE_QUEUED_PAUSE",
+  "safety_state": "EMERGENCY_STOP",
+  "transitions": [
+    "PLANNING:LEFT:MODEL_TARGET",
+    "EXECUTING",
+    "TARGETS_REACHED_HOLDING",
+    "CRISIS_ESCAPE_PLANNING:RIGHT",
+    "IDLE_EVADE_QUEUED_PAUSE"
+  ],
+  "safety_transitions": [
+    "SAFE",
+    "PAUSE",
+    "EMERGENCY_STOP"
+  ],
+  "minimum_safety_distance_m": 0.0,
+  "ground_truth_minimum_distance_m_evaluator_only": 0.14735906060687676,
+  "dynamic_events": [
+    "dynamic_under_route_skipped,left,not_blocking_or_infeasible",
+    "dynamic_under_route_skipped,right,not_blocking_or_infeasible",
+    "safety_transition,SAFE,PAUSE,0.0"
+  ],
+  "completion_events": [
+    "motion_complete,both_targets,dynamic"
+  ],
+  "target_holding_reached": true,
+  "target_holding_error_m": {
+    "left": 0.04735827450362318,
+    "right": 0.022886549774328576
+  },
+  "post_target_avoidance_requested": true,
+  "avoidance_hold_seen": false,
+  "target_restore_seen": false,
+  "minimum_tcp_target_error_m": {
+    "left": 0.047358274503622906,
+    "right": 0.0228234410849018
+  },
+  "final_tcp_target_error_m": {
+    "left": 0.04735827450362347,
+    "right": 0.022886549774328597
+  }
+}

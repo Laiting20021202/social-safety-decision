@@ -292,6 +292,7 @@ def avoidance_route_waypoints(
     maximum_backtrack_m: float = 0.02,
     force_local_detour: bool = False,
     forced_local_clearance_m: float | None = None,
+    require_3d_intersection: bool = False,
 ) -> UnderRoute | None:
     """Choose a deterministic below/above/side guide around a blocking box.
 
@@ -309,6 +310,11 @@ def avoidance_route_waypoints(
     if not np.isfinite(np.concatenate((start, goal, center, size))).all():
         return None
     if np.any(size <= 0.0):
+        return None
+
+    if require_3d_intersection and not force_local_detour and not segment_intersects_box(
+        start, goal, center, size, margin_m=collision_margin_m
+    ):
         return None
 
     horizontal = goal[:2] - start[:2]

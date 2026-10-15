@@ -1,0 +1,225 @@
+{
+  "model": "existing Metric Video Depth Anything Small",
+  "scale_source": "RGB AprilTag id 0 with known 0.08m side; no world pose or truth depth",
+  "input": "one RGB stream + CameraInfo.K",
+  "rows": [
+    {
+      "frame": 0,
+      "stamp": 66.637,
+      "processing_ms": 38.29438192769885,
+      "scale": null,
+      "tag_locked": false,
+      "evaluation_median_depth_error_m": 1.1494417190551758,
+      "evaluation_p95_depth_error_m": 2.8260790348052978
+    },
+    {
+      "frame": 1,
+      "stamp": 66.703,
+      "processing_ms": 45.42205994948745,
+      "scale": null,
+      "tag_locked": false,
+      "evaluation_median_depth_error_m": 2.0164122581481934,
+      "evaluation_p95_depth_error_m": 4.175766086578367
+    },
+    {
+      "frame": 2,
+      "stamp": 66.77000000000001,
+      "processing_ms": 38.72320591472089,
+      "scale": 0.33321011398876244,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.16589611768722534,
+      "evaluation_p95_depth_error_m": 0.5843343496322628
+    },
+    {
+      "frame": 3,
+      "stamp": 66.83800000000001,
+      "processing_ms": 38.682568119838834,
+      "scale": 0.33281026185197593,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.19421601295471191,
+      "evaluation_p95_depth_error_m": 0.6952232122421262
+    },
+    {
+      "frame": 4,
+      "stamp": 66.903,
+      "processing_ms": 45.985443983227015,
+      "scale": 0.33241088953775355,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.21950578689575195,
+      "evaluation_p95_depth_error_m": 0.797381210327148
+    },
+    {
+      "frame": 5,
+      "stamp": 66.971,
+      "processing_ms": 37.0755719486624,
+      "scale": 0.3320119964703082,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.24140429496765137,
+      "evaluation_p95_depth_error_m": 0.8982405662536618
+    },
+    {
+      "frame": 6,
+      "stamp": 67.03800000000001,
+      "processing_ms": 38.62703894264996,
+      "scale": 0.33161358207454383,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.2603205442428589,
+      "evaluation_p95_depth_error_m": 0.9996596336364737
+    },
+    {
+      "frame": 7,
+      "stamp": 67.104,
+      "processing_ms": 47.95001819729805,
+      "scale": 0.3312156457760544,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.27553820610046387,
+      "evaluation_p95_depth_error_m": 1.102130579948424
+    },
+    {
+      "frame": 8,
+      "stamp": 67.17,
+      "processing_ms": 36.19860205799341,
+      "scale": 0.33081818700112314,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.28736960887908936,
+      "evaluation_p95_depth_error_m": 1.195289134979248
+    },
+    {
+      "frame": 9,
+      "stamp": 67.23700000000001,
+      "processing_ms": 41.11628094688058,
+      "scale": 0.3304212051767218,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.29770392179489136,
+      "evaluation_p95_depth_error_m": 1.277838468551631
+    },
+    {
+      "frame": 10,
+      "stamp": 67.304,
+      "processing_ms": 57.853691978380084,
+      "scale": 0.33002469973050974,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.30863410234451294,
+      "evaluation_p95_depth_error_m": 1.3574095964431736
+    },
+    {
+      "frame": 11,
+      "stamp": 67.37100000000001,
+      "processing_ms": 51.763324066996574,
+      "scale": 0.32962867009083313,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.3210141062736511,
+      "evaluation_p95_depth_error_m": 1.435084581375121
+    },
+    {
+      "frame": 12,
+      "stamp": 67.437,
+      "processing_ms": 37.822047946974635,
+      "scale": 0.32923311568672414,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.33416152000427246,
+      "evaluation_p95_depth_error_m": 1.5119604349136337
+    },
+    {
+      "frame": 13,
+      "stamp": 67.503,
+      "processing_ms": 39.57652882672846,
+      "scale": 0.32883803594790006,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.347400963306427,
+      "evaluation_p95_depth_error_m": 1.5863987922668457
+    },
+    {
+      "frame": 14,
+      "stamp": 67.57000000000001,
+      "processing_ms": 44.47164502926171,
+      "scale": 0.3284434303047626,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.3592502474784851,
+      "evaluation_p95_depth_error_m": 1.6562219619750975
+    },
+    {
+      "frame": 15,
+      "stamp": 67.637,
+      "processing_ms": 40.88669503107667,
+      "scale": 0.32804929818839684,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.3691067099571228,
+      "evaluation_p95_depth_error_m": 1.7195684432983371
+    },
+    {
+      "frame": 16,
+      "stamp": 67.703,
+      "processing_ms": 41.288190986961126,
+      "scale": 0.32765563903057077,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.378509521484375,
+      "evaluation_p95_depth_error_m": 1.7755320787429805
+    },
+    {
+      "frame": 17,
+      "stamp": 67.77000000000001,
+      "processing_ms": 46.29719699732959,
+      "scale": 0.32726245226373407,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.38981544971466064,
+      "evaluation_p95_depth_error_m": 1.8348114490509018
+    },
+    {
+      "frame": 18,
+      "stamp": 67.837,
+      "processing_ms": 40.00976704992354,
+      "scale": 0.32686973732101754,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.4024934768676758,
+      "evaluation_p95_depth_error_m": 1.8953576564788779
+    },
+    {
+      "frame": 19,
+      "stamp": 67.903,
+      "processing_ms": 39.13272195495665,
+      "scale": 0.3264774936362323,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.41440749168395996,
+      "evaluation_p95_depth_error_m": 1.9477697134017935
+    },
+    {
+      "frame": 20,
+      "stamp": 67.97,
+      "processing_ms": 47.053491929546,
+      "scale": 0.3260857206438688,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.42451417446136475,
+      "evaluation_p95_depth_error_m": 1.9896207332611082
+    },
+    {
+      "frame": 21,
+      "stamp": 68.037,
+      "processing_ms": 38.46065909601748,
+      "scale": 0.3256944177790962,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.432617723941803,
+      "evaluation_p95_depth_error_m": 2.0230687141418437
+    },
+    {
+      "frame": 22,
+      "stamp": 68.10300000000001,
+      "processing_ms": 38.32095908001065,
+      "scale": 0.3253035844777613,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.4391888380050659,
+      "evaluation_p95_depth_error_m": 2.0549251556396477
+    },
+    {
+      "frame": 23,
+      "stamp": 68.17,
+      "processing_ms": 44.4631059654057,
+      "scale": 0.32491322017638796,
+      "tag_locked": true,
+      "evaluation_median_depth_error_m": 0.4449753761291504,
+      "evaluation_p95_depth_error_m": 2.0858119964599573
+    }
+  ],
+  "production_ready": false,
+  "note": "Offline feasibility only. Does not establish obstacle-boundary accuracy, closed-loop safety, or latency under concurrent GUI/tracker load."
+}

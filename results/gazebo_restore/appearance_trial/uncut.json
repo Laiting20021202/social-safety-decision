@@ -1,0 +1,13 @@
+{
+  "output": "/home/david/Desktop/laiting/itri/3d_safety_decision/realtime_3d_safety_decision/results/gazebo_restore/appearance_trial/uncut.mp4",
+  "wall_duration_sec": 133.33480993891135,
+  "frames": 2000,
+  "fps": 15,
+  "duplicate_frames": 0,
+  "image_topic": "/rgbd/color/image_raw",
+  "label": "Geometric avoidance + visibility memory | RGB-D baseline",
+  "observer_topic": "/demo/observer/recording_camera/image_raw",
+  "encoder_exit": 0,
+  "playback": "1x wall time; no cuts",
+  "synchronization": "latest received observer and onboard images; both acquisition stamps logged"
+}

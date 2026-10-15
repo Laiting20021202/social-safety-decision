@@ -1,0 +1,11 @@
+{
+  "backend": "Gazebo Classic physics contact stream; evaluator only",
+  "duration_sec": 230.2367676110007,
+  "transport_exit": 0,
+  "all_contact_reports": 196217,
+  "moving_arm_contact_reports": {},
+  "maximum_penetration_m": {},
+  "first_contact_wall_sec": {},
+  "passed": true,
+  "limitation": "Discrete physics contacts; does not measure positive clearance or prove continuous-time collision freedom."
+}

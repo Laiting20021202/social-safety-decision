@@ -228,6 +228,8 @@ def build_world() -> ET.ElementTree:
             )
             _text(link, "gravity", str(bool(targets.get("gravity_enabled", False))).lower())
             _text(link, "kinematic", "true")
+            if not bool(targets.get("collision_enabled", False)) and not bool(targets.get("sensor_visible", True)):
+                _text(link.find("visual"), "visibility_flags", "2")
     elif bool(scene["cubes"].get("enabled", True)):
         cube_size = float(scene["cubes"]["size"])
         for spec in deterministic_cube_layout(scene):
@@ -279,6 +281,13 @@ def build_world() -> ET.ElementTree:
         hand_mesh_node = ET.SubElement(hand_geometry, "mesh")
         _text(hand_mesh_node, "uri", hand_mesh.as_uri())
         _text(hand_mesh_node, "scale", _pose(hand.get("visual_scale", [1, 1, 1])))
+        # The old palm box did not cover the visible fingers. Physics/contact
+        # evaluation must include the same complete mesh seen by the camera.
+        mesh_collision = ET.SubElement(hand_link, "collision", {"name": "visible_hand_mesh"})
+        _text(mesh_collision, "pose", _pose((0.0, 0.0, 0.0, *hand_rpy)))
+        collision_mesh = ET.SubElement(ET.SubElement(mesh_collision, "geometry"), "mesh")
+        _text(collision_mesh, "uri", hand_mesh.as_uri())
+        _text(collision_mesh, "scale", _pose(hand.get("visual_scale", [1, 1, 1])))
     else:
         fallback = ET.SubElement(hand_link, "visual", {"name": "missing_mesh_fallback"})
         fallback_geometry = ET.SubElement(fallback, "geometry")
@@ -384,6 +393,9 @@ def build_world() -> ET.ElementTree:
     _text(sensor, "update_rate", "15")
     _text(sensor, "visualize", "true")
     camera_node = ET.SubElement(sensor, "camera")
+    # Bit 2 is reserved for display-only task markers. Real obstacle visuals
+    # retain all visibility flags, so every physical object remains visible.
+    _text(camera_node, "visibility_mask", "1")
     _text(camera_node, "horizontal_fov", f"{math.radians(float(camera['horizontal_fov_deg'])):.9g}")
     image = ET.SubElement(camera_node, "image")
     _text(image, "width", camera["resolution"]["width"])

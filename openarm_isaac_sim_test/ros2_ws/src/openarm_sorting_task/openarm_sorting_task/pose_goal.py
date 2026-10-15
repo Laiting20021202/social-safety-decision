@@ -11,6 +11,7 @@ from control_msgs.action import FollowJointTrajectory
 from gazebo_msgs.msg import ModelStates
 from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.action import MoveGroup
+from moveit_msgs.srv import GetCartesianPath
 from moveit_msgs.msg import (
     CollisionObject,
     Constraints,
@@ -45,12 +46,15 @@ from .route_planner import (
 from .idle_avoidance import (
     active_escape_can_continue,
     crisis_escape_point,
+    reactive_escape_point,
+    retime_local_path,
     obstacle_has_withdrawn,
     obstacle_is_clear_for_recovery,
     safety_evade_sequence,
     select_evading_sides,
     select_evading_sides_from_links,
     union_axis_aligned_boxes,
+    nearest_box_component,
 )
 
 
@@ -116,6 +120,7 @@ class OpenArmPoseGoal(Node):
         self._retry_timer: Any | None = None
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
+        self._cartesian_client = self.create_client(GetCartesianPath, "/compute_cartesian_path")
         self._state_pub = self.create_publisher(String, "/openarm/task/state", 10)
         self._events_pub = self.create_publisher(String, "/openarm/events", 50)
         self._safety_command_pub = self.create_publisher(
@@ -468,8 +473,11 @@ class OpenArmPoseGoal(Node):
                 ),
                 maximum_tcp_z_m=float(config.get("maximum_tcp_z_m", 1.12)),
             )
+            if config.get("reactive_local_goal", False):
+                xyz = reactive_escape_point(tcp, self._arm_link_points(side), center, size,
+                                            side=side, maximum_step=float(config.get("maximum_local_step_m", .12)))
             target = self._waypoint_message(xyz)
-            if vertical_only:
+            if vertical_only or config.get("reactive_local_goal", False):
                 orientation = self._tcp_orientation(side)
                 if orientation is None:
                     orientation = np.asarray(
@@ -663,7 +671,9 @@ class OpenArmPoseGoal(Node):
                 )
             )
             sizes.append(np.asarray(primitive.dimensions, dtype=float))
-        union = union_axis_aligned_boxes(centers, sizes)
+        union = nearest_box_component(centers, sizes, np.concatenate([
+            self._arm_link_points(side) for side in ("left", "right")
+        ]))
         if union is not None:
             center, size = union
             self._dynamic_obstacle = (obstacle.id, center, size)
@@ -836,6 +846,7 @@ class OpenArmPoseGoal(Node):
                     ),
                     minimum_tcp_z_m=float(route_config.get("minimum_tcp_z_m", 0.16)),
                     maximum_tcp_z_m=float(route_config.get("maximum_tcp_z_m", 1.12)),
+                    require_3d_intersection=bool(route_config.get("require_3d_intersection", True)),
                     entry_horizontal_clearance_m=float(
                         route_config.get("entry_horizontal_clearance_m", 0.08)
                     ),
@@ -1116,6 +1127,25 @@ class OpenArmPoseGoal(Node):
         config = self._config.get("crisis_avoidance", {})
         self._dynamic_target_pub.publish(target)
         self._set_state(f"CRISIS_ESCAPE_PLANNING:{self._active_side.upper()}")
+        if config.get("cartesian_local_path", False) and self._cartesian_client.service_is_ready():
+            request = GetCartesianPath.Request()
+            request.header = target.header
+            request.group_name = str(self._config["groups"][self._active_side])
+            request.link_name = str(self._config["end_effector_links"][self._active_side])
+            request.start_state.joint_state.name = list(self._joint_positions)
+            request.start_state.joint_state.position = list(self._joint_positions.values())
+            request.start_state.is_diff = True
+            request.waypoints = [target.pose]
+            request.max_step = .008
+            request.jump_threshold = 1.5
+            request.revolute_jump_threshold = .20
+            request.avoid_collisions = True
+            self._busy = True
+            generation = self._request_generation
+            self._cartesian_client.call_async(request).add_done_callback(
+                lambda future: self._local_path_result(future, generation, target)
+            )
+            return
         self._plan_position(
             target,
             float(config.get("pose_tolerance_m", 0.035)),
@@ -1127,6 +1157,37 @@ class OpenArmPoseGoal(Node):
                 and self._current_step[1] == "idle_evade"
             ),
         )
+
+    def _local_path_result(self, future, generation, target):
+        if generation != self._request_generation:
+            return
+        self._busy = False
+        result = future.result()
+        trajectory = result.solution.joint_trajectory
+        if result.fraction < .98 or len(trajectory.points) < 2:
+            # A straight local retreat can be blocked by the other arm/table.
+            # Preserve tool orientation in the existing collision-checked fallback.
+            self._emit(f"reactive_local_blocked,{self._active_side},{result.fraction:.3f}")
+            self._plan_position(target, .02, constrain_orientation=True)
+            return
+        q = np.asarray([point.positions for point in trajectory.points])
+        if np.max(np.abs(q - q[0])) > .8:
+            self._emit(f"reactive_joint_jump_rejected,{self._active_side}")
+            self._set_state("REACTIVE_LOCAL_PATH_REJECTED")
+            return
+        times, velocities = retime_local_path(q)
+        for point, stamp, velocity in zip(trajectory.points, times, velocities):
+            point.time_from_start = Duration(seconds=float(stamp)).to_msg()
+            point.velocities = velocity.tolist()
+            point.accelerations = []
+        if self._safety_state == "EMERGENCY_STOP":
+            self._set_state("CRISIS_ESCAPE_BLOCKED_ESTOP")
+            return
+        self._emit(f"reactive_local_execute,{self._active_side},duration={times[-1]:.3f},joint_excursion={np.max(np.abs(q-q[0])):.3f}")
+        self._safety_command_pub.publish(String(data="escape_started"))
+        self._set_state("CRISIS_ESCAPE_EXECUTING")
+        self._busy = True
+        self._execute(trajectory)
 
     def _plan_joint_values(self, values: list[float]) -> None:
         constraints = Constraints()
@@ -1758,6 +1819,7 @@ class OpenArmPoseGoal(Node):
             vertical_clearance_m=float(config.get("vertical_clearance_m", 0.04)),
             minimum_tcp_z_m=float(config.get("minimum_tcp_z_m", 0.16)),
             maximum_tcp_z_m=float(config.get("maximum_tcp_z_m", 1.12)),
+            require_3d_intersection=bool(config.get("require_3d_intersection", True)),
             entry_horizontal_clearance_m=float(
                 config.get("entry_horizontal_clearance_m", 0.08)
             ),

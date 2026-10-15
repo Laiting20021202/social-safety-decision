@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from pathlib import Path
+import yaml
 
 import numpy as np
 import rclpy
@@ -23,6 +25,8 @@ PRODUCTION_WORLD_TOPIC = "/realtime_safety/environment_cloud_world"
 class OcclusionValidator(Node):
     def __init__(self) -> None:
         super().__init__("validate_rgbd_occlusion")
+        table = yaml.safe_load((Path(__file__).resolve().parents[1] / "config/scene.yaml").read_text())["table"]
+        self.target_surface = np.array([table["center"][0], table["center"][1], table["top_z"]])
         self.phase = "idle"
         self.counts: dict[str, list[int]] = {"clear": [], "blocked": []}
         self.received: dict[str, list[float]] = {"clear": [], "blocked": []}
@@ -54,11 +58,11 @@ class OcclusionValidator(Node):
                 [pose.position.x, pose.position.y, pose.position.z], dtype=float
             )
             for name, pose in zip(message.name, message.pose, strict=True)
-            if name in {"rgbd_sensor", "left_target_cube"}
+            if name == "rgbd_sensor"
         }
 
     def _cloud(self, message: PointCloud2) -> None:
-        if self.phase not in self.counts or "left_target_cube" not in self.poses:
+        if self.phase not in self.counts:
             return
         self.received[self.phase].append(time.monotonic())
         stamp = message.header.stamp
@@ -82,7 +86,7 @@ class OcclusionValidator(Node):
             return np.ascontiguousarray(packed[:, offset : offset + 4]).view("<f4").reshape(-1)
 
         xyz = np.column_stack((field("x"), field("y"), field("z")))
-        target = self.poses["left_target_cube"]
+        target = self.target_surface
         points = int((np.abs(xyz - target) <= 0.04).all(axis=1).sum())
         self.counts[self.phase].append(points)
 
@@ -96,7 +100,7 @@ class OcclusionValidator(Node):
 
     def occluding_pose(self) -> PoseStamped:
         camera = self.poses["rgbd_sensor"]
-        target = self.poses["left_target_cube"]
+        target = self.target_surface
         center = camera + 0.50 * (target - camera)
         message = PoseStamped()
         message.header.frame_id = "world"
@@ -127,7 +131,7 @@ def main() -> int:
     try:
         node.command("withdraw")
         spin(node, args.settle_seconds)
-        if not {"rgbd_sensor", "left_target_cube"}.issubset(node.poses):
+        if "rgbd_sensor" not in node.poses:
             print(json.dumps({"passed": False, "reason": "model_poses_missing"}))
             return 1
         node.phase = "clear"
@@ -177,8 +181,9 @@ def main() -> int:
         )
         report = {
             "passed": passed,
-            "clear_cube_points_median": clear,
-            "occluded_cube_points_median": blocked,
+            "reference_surface": "physical tabletop patch (display-only goal markers excluded)",
+            "clear_surface_points_median": clear,
+            "occluded_surface_points_median": blocked,
             "remaining_ratio": ratio,
             "clear_frames": len(node.counts["clear"]),
             "occluded_frames": len(node.counts["blocked"]),

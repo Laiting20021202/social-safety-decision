@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.duration import Duration
+from rclpy.executors import MultiThreadedExecutor, ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy,
@@ -69,7 +70,30 @@ class _RgbdFrame:
     height: int
     width: int
     gray: np.ndarray | None = None
+    rgb: np.ndarray | None = None
     processed: bool = False
+
+
+def appearance_support(rgb, mask=None, palette=None):
+    """Keep the neural seed's colour distribution during optical tracking.
+
+    A drifting flow mask must not switch from skin to a green goal marker or
+    a grey robot. No fixed skin colour or simulator identity is used; a new
+    neural seed establishes its own hue/saturation distribution.
+    """
+    hsv = cv2.cvtColor(np.asarray(rgb, np.uint8), cv2.COLOR_RGB2HSV)
+    h, s = hsv[..., 0] // 10, hsv[..., 1] // 32
+    if palette is None:
+        selected = np.asarray(mask).astype(bool)
+        counts = np.bincount((h[selected].astype(int)*8+s[selected]), minlength=144).reshape(18,8)
+        active = counts >= max(3, counts.max()*.10)
+        palette = np.zeros_like(active)
+        for dh in (-1,0,1):
+            shifted = np.roll(active,dh,axis=0)
+            palette |= shifted
+            palette[:,1:] |= shifted[:,:-1]
+            palette[:,:-1] |= shifted[:,1:]
+    return palette[h,s], palette
 
 
 def _stamp_ns(message: object) -> int:
@@ -406,10 +430,17 @@ class RealtimeObstacleResampler(Node):
         self.declare_parameter("spatial_padding_m", 0.025)
         self.declare_parameter("spatial_recovery_max_age_sec", 0.40)
         self.declare_parameter("empty_model_clear_updates", 2)
+        self.declare_parameter("maximum_mask_camera_rotation_deg", 3.0)
+        self._model_camera_pose = None
         # The GUI can select either EdgeTAM or the retained MediaPipe/YOLO
         # backend. Apply the OpenArm TF geometry filter after that mux so both
         # paths are unable to publish the robot itself as a human obstacle.
         self.declare_parameter("self_filter.enabled", True)
+        self.declare_parameter("self_filter.urdf_path", "")
+        self._urdf_self_filter = None
+        if self.get_parameter("self_filter.urdf_path").value:
+            from realtime_safety.edgetam_tracker.urdf_self_filter import UrdfSelfFilter
+            self._urdf_self_filter = UrdfSelfFilter(str(self.get_parameter("self_filter.urdf_path").value))
         self.declare_parameter(
             "self_filter.link_frames", _OPENARM_SELF_FILTER_FRAMES
         )
@@ -483,6 +514,8 @@ class RealtimeObstacleResampler(Node):
         self._self_filter_status = "disabled"
         self._frames: OrderedDict[int, _RgbdFrame] = OrderedDict()
         self._images: OrderedDict[int, np.ndarray] = OrderedDict()
+        self._rgb_images: OrderedDict[int, np.ndarray] = OrderedDict()
+        self._appearance_palette = None
         self._pending_models: OrderedDict[int, np.ndarray] = OrderedDict()
         self._mask: np.ndarray | None = None
         self._mask_gray: np.ndarray | None = None
@@ -551,9 +584,11 @@ class RealtimeObstacleResampler(Node):
         )
         stamp = _stamp_ns(message)
         self._images[stamp] = gray
+        self._rgb_images[stamp] = image.copy() if message.encoding == "rgb8" else image[...,::-1].copy()
         frame = self._frames.get(stamp)
         if frame is not None and frame.gray is None:
             frame.gray = gray
+            frame.rgb = self._rgb_images[stamp]
             self._apply_pending_model(frame)
             self._process_frame(frame)
         self._trim_buffers()
@@ -574,6 +609,7 @@ class RealtimeObstacleResampler(Node):
             height=int(message.height),
             width=int(message.width),
             gray=self._images.get(stamp),
+            rgb=self._rgb_images.get(stamp),
         )
         self._frames[stamp] = frame
         if frame.gray is not None:
@@ -588,7 +624,10 @@ class RealtimeObstacleResampler(Node):
         points = self._filter_robot_points(
             points,
             str(message.header.frame_id) or "rgbd_color_optical_frame",
+            at_time=rclpy.time.Time.from_msg(message.header.stamp),
         )
+        if self._self_filter_status.startswith("unavailable"):
+            return
         if len(points) < 8:
             # One neural miss is tolerated to avoid visual flicker. Two
             # consecutive measured empty outputs mean the hand has left the
@@ -641,11 +680,14 @@ class RealtimeObstacleResampler(Node):
             return
         self._model_applied += 1
         self._mask = mask
+        if frame.rgb is not None:
+            _, self._appearance_palette = appearance_support(frame.rgb, mask)
         self._mask_gray = frame.gray
         self._mask_stamp_ns = frame.stamp_ns
         # Model validity begins at the RGB-D frame actually used to recover
         # its mask, not at a potentially adjacent 30 Hz RGB timestamp.
         self._model_stamp_ns = frame.stamp_ns
+        self._model_camera_pose = self._camera_pose(frame.stamp_ns)
         self._model_depth = float(np.median(points[:, 2]))
         self._model_lower = (
             np.quantile(points, 0.005, axis=0) - self._spatial_padding
@@ -690,6 +732,18 @@ class RealtimeObstacleResampler(Node):
         if frame.processed:
             return
         frame.processed = True
+        if self._mask is not None and self._model_camera_pose is not None:
+            current_pose = self._camera_pose(frame.stamp_ns)
+            if current_pose is None:
+                return
+            old_position, old_quaternion = self._model_camera_pose
+            position, quaternion = current_pose
+            angle = np.degrees(2 * np.arccos(np.clip(abs(np.dot(old_quaternion, quaternion)), 0., 1.)))
+            if angle > float(self.get_parameter("maximum_mask_camera_rotation_deg").value) or np.linalg.norm(position - old_position) > .02:
+                # A mask tied to an older view must not gradually latch onto
+                # the tabletop as the camera pans. Await a fresh neural seed;
+                # world-frame safety memory covers the unobserved interval.
+                self._clear_mask()
         self._advance_mask(frame)
         points = np.empty((0, 3), dtype=np.float32)
         model_age_ns = frame.stamp_ns - self._model_stamp_ns
@@ -728,9 +782,16 @@ class RealtimeObstacleResampler(Node):
                     selected = depth_selected
                     self._spatial_recoveries += 1
             points = frame.xyz[selected]
+            if frame.rgb is not None and self._appearance_palette is not None:
+                supported, _ = appearance_support(frame.rgb, palette=self._appearance_palette)
+                selected &= supported.reshape(-1)
+                points = frame.xyz[selected]
             points = self._filter_robot_points(
-                points, "rgbd_color_optical_frame"
+                points, "rgbd_color_optical_frame",
+                at_time=rclpy.time.Time(nanoseconds=frame.stamp_ns),
             )
+            if self._self_filter_status.startswith("unavailable"):
+                return
             if len(points) >= 8:
                 self._model_depth = float(
                     0.85 * self._model_depth + 0.15 * np.median(points[:, 2])
@@ -790,12 +851,35 @@ class RealtimeObstacleResampler(Node):
             )
             self._last_status_ns = frame.stamp_ns
 
+    def _camera_pose(self, stamp_ns):
+        try:
+            transform = self._tf_buffer.lookup_transform(
+                "world", "rgbd_color_optical_frame",
+                rclpy.time.Time(nanoseconds=stamp_ns),
+                timeout=Duration(seconds=.02),
+            ).transform
+        except TransformException:
+            return None
+        p, q = transform.translation, transform.rotation
+        return np.array([p.x, p.y, p.z]), np.array([q.x, q.y, q.z, q.w])
+
     def _filter_robot_points(
-        self, points: np.ndarray, target_frame: str
+        self, points: np.ndarray, target_frame: str, at_time=None
     ) -> np.ndarray:
         if not self._self_filter_enabled or not len(points):
             self._self_filter_status = "disabled" if not self._self_filter_enabled else "empty"
             return points
+        if self._urdf_self_filter is not None:
+            from realtime_safety.ros2_bridge.robot_geometry import robot_keep_mask
+            try:
+                keep = robot_keep_mask(self._urdf_self_filter, self._tf_buffer, points,
+                                       target_frame, at_time if at_time is not None else rclpy.time.Time())
+            except TransformException:
+                self._self_filter_status = "unavailable:holding"
+                return np.empty((0, 3), dtype=np.float32)
+            self._self_filter_removed += int(np.count_nonzero(~keep))
+            self._self_filter_status = f"urdf:{sum(keep)}/{len(points)}"
+            return points[keep]
         centers: list[list[float]] = []
         radii: list[float] = []
         timeout = Duration(seconds=self._self_filter_tf_timeout)
@@ -806,7 +890,7 @@ class RealtimeObstacleResampler(Node):
                 transform = self._tf_buffer.lookup_transform(
                     target_frame,
                     frame,
-                    rclpy.time.Time(),
+                    at_time if at_time is not None else rclpy.time.Time(),
                     timeout=timeout,
                 )
             except TransformException:
@@ -815,12 +899,12 @@ class RealtimeObstacleResampler(Node):
             centers.append([translation.x, translation.y, translation.z])
             radii.append(float(radius))
         if len(centers) != len(self._self_filter_frames):
-            # Preserve the candidate on incomplete TF rather than hiding a
-            # real person. The status makes this fail-safe degradation visible.
+            # With incomplete kinematics the candidate cannot enter memory.
+            # The downstream memory/watchdog retains previous risk.
             self._self_filter_status = (
                 f"unavailable:{len(centers)}/{len(self._self_filter_frames)}"
             )
-            return points
+            return np.empty((0, 3), dtype=np.float32)
         filtered, removed = filter_robot_self_points(
             points,
             np.asarray(centers, dtype=np.float32),
@@ -844,6 +928,8 @@ class RealtimeObstacleResampler(Node):
         return filtered
 
     def _clear_mask(self) -> None:
+        self._appearance_palette = None
+        self._model_camera_pose = None
         self._mask = None
         self._mask_gray = None
         self._mask_stamp_ns = 0
@@ -858,6 +944,8 @@ class RealtimeObstacleResampler(Node):
             self._frames.popitem(last=False)
         while len(self._images) > self._maximum_frames:
             self._images.popitem(last=False)
+        while len(self._rgb_images) > self._maximum_frames:
+            self._rgb_images.popitem(last=False)
         while len(self._pending_models) > self._maximum_frames:
             self._pending_models.popitem(last=False)
         if self._frames:
@@ -874,11 +962,14 @@ class RealtimeObstacleResampler(Node):
 def main() -> None:
     rclpy.init()
     node = RealtimeObstacleResampler()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
+        executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

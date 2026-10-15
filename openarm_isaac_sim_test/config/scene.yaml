@@ -85,13 +85,16 @@ bins:
 
 # Movable visual goals for the left and right gripper TCPs.  They are
 # kinematic, gravity-free and deliberately excluded from collision geometry;
-# the RGB-D camera still sees them, while the fingertip center can occupy the
-# exact marker pose.  Edit these two models directly in Gazebo.
+# the fingertip center can occupy the exact marker pose. Display-only markers
+# are visible in the GUI/observer, excluded from onboard RGB/depth rendering so
+# they do not become fake physical obstacles in persistent memory. Physical
+# objects are always sensor-visible. Edit these two models directly in Gazebo.
 target_cubes:
   enabled: true
   size: 0.055
   gravity_enabled: false
   collision_enabled: false
+  sensor_visible: false
   models:
     left:
       name: left_target_cube

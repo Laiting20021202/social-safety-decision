@@ -531,11 +531,16 @@ class RgbdImageSceneBridge:
         )
         self._synchronizer.registerCallback(self._receive_synchronized)
         if self.camera_pose_topic:
+            from rclpy.callback_groups import ReentrantCallbackGroup
+            # Backprojection can consume a full image period. Pose reception
+            # must not queue behind that mutually-exclusive image callback.
+            self._pose_callback_group = ReentrantCallbackGroup()
             node.create_subscription(
                 PoseStamped,
                 self.camera_pose_topic,
                 self._receive_camera_pose,
                 qos_profile_sensor_data,
+                callback_group=self._pose_callback_group,
             )
         runtime.add_node(node)
         self._runtime = runtime
@@ -602,12 +607,15 @@ class RgbdImageSceneBridge:
     def _pose_for_stamp(self, stamp: float) -> tuple[np.ndarray | None, np.ndarray | None]:
         with self._lock:
             if not self._pose_history:
+                if self.camera_pose_topic:
+                    raise ValueError("waiting for timestamped camera pose")
                 return None, None
             for pose_stamp, position, rotation in reversed(self._pose_history):
                 if pose_stamp <= stamp:
+                    if self.camera_pose_topic and stamp - pose_stamp > 0.25:
+                        raise ValueError("camera pose is stale for this image")
                     return position.copy(), rotation.copy()
-            _, position, rotation = self._pose_history[0]
-            return position.copy(), rotation.copy()
+            raise ValueError("image predates camera pose history; future pose rejected")
 
     def _receive_synchronized(
         self, rgb_message: Any, depth_message: Any, camera_info: Any

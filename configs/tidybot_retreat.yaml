@@ -1,0 +1,46 @@
+# Independent simulation-only base retreat. Dry-run is the default.
+cloud_topic: /realtime_safety/pointcloud
+cloud_frame: isaac_front_estimated_optical_frame
+joint_topic: /tidybot/joint_states
+command_topic: /tidybot/cmd_vel
+# PLACEHOLDER: current RGB estimated cloud has no verified metric scale.
+cloud_scale_to_m: 1.0
+# Verified from X9_scene_openarm_tidybot_mobile.usda on 2026-09-30.
+# Optical axes are x=right, y=down, z=forward. Relative to the rotating base,
+# camera_front is at (0.1000000, 0.0102028, 1.3149987) m, with no yaw and a
+# 20 degree downward pitch. p_base = R * p_optical + translation.
+cloud_to_base:
+  - [0, -0.3420201433, 0.9396926208, 0.1000000]
+  - [-1, 0, 0, 0.0102028]
+  - [0, -0.9396926208, -0.3420201433, 1.3149987]
+  - [0, 0, 0, 1]
+controller:
+  trigger_distance_m: 1.0
+  release_distance_m: 1.3
+  travel_m: 2.0
+  # Isaac currently advances at about one third real time on this scene. The
+  # command remains within the adapter's simulation-only 0.30 m/s cap.
+  speed_mps: 0.30
+  tolerance_m: 0.03
+  command_frame: body
+  confirm_frames: 3
+  cloud_timeout_s: 1.5
+  pose_timeout_s: 0.5
+  max_duration_s: 60.0
+  stall_timeout_s: 3.0
+  min_points: 10
+  min_valid_points: 30
+  cell_m: 0.15
+  min_height_m: 0.15
+  max_height_m: 1.8
+  robot_radius_m: 0.35
+  max_cross_track_m: 0.25
+# These record verified facts, not switches to bypass unresolved setup.
+verified:
+  metric_scale_verified: false
+  camera_extrinsics_verified: true
+  base_pose_world_meters_verified: true
+  holonomic_command_frame_verified: true
+  receiver_watchdog_verified: true
+  isolated_simulation: true
+  retreat_corridor_verified_clear: false

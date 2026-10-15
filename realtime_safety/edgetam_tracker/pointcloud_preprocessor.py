@@ -330,6 +330,7 @@ class StaticBackgroundFilter:
         return StaticBackgroundState.CALIBRATING
 
     def reset(self) -> None:
+        self._reference_pose = None
         self._warmup_count = 0
         self._calibration_count = 0
         self._sample_points.clear()
@@ -350,6 +351,27 @@ class StaticBackgroundFilter:
         self._latest_alignment_candidate_scale = 1.0
         self._latest_alignment_candidate_points = 0
         self._latest_alignment_candidate_reason = "not_evaluated"
+
+    def filter_at_pose(self, cloud: CloudFrame, rotation, translation) -> StaticBackgroundFilterResult:
+        """Compare geometry in the calibration view even after camera motion.
+
+        Preserve pixel/source indices and return selected points in the CURRENT
+        view so the existing RGB masks, GUI and optical-cloud consumers work.
+        Pose must be for this cloud's capture time and come from TF/kinematics.
+        """
+        if getattr(self, "_reference_pose", None) is None:
+            self._reference_pose = (rotation.copy(), translation.copy())
+        reference_rotation, reference_translation = self._reference_pose
+        relative_rotation = reference_rotation.T @ rotation
+        relative_translation = reference_rotation.T @ (translation - reference_translation)
+        if np.allclose(relative_rotation, np.eye(3), atol=1e-7) and np.linalg.norm(relative_translation) < 1e-7:
+            return self.filter(cloud)
+        aligned = replace(cloud, points=cloud.points @ relative_rotation.T + relative_translation)
+        result = self.filter(aligned)
+        result.cloud = replace(
+            result.cloud, points=(result.cloud.points - relative_translation) @ relative_rotation
+        )
+        return result
 
     def filter(self, cloud: CloudFrame) -> StaticBackgroundFilterResult:
         if not self.config.enabled:

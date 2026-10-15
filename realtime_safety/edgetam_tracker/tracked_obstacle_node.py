@@ -113,6 +113,7 @@ from realtime_safety.edgetam_tracker.robot_self_filter import (
     RobotSelfFilter,
     RobotSelfFilterConfig,
     SelfFilterStatus,
+    SelfFilterResult,
 )
 from realtime_safety.edgetam_tracker.ros_utils import (
     make_marker_array,
@@ -234,6 +235,7 @@ _DEFAULTS: dict[str, Any] = {
     "pointcloud.maximum_depth_m": 4.0,
     "pointcloud.use_high_resolution_for_final_geometry": True,
     "background.enabled": False,
+    "background.compensate_camera_motion": False,
     "background.warmup_frames": 0,
     "background.calibration_frames": 12,
     "background.voxel_size": 0.015,
@@ -263,6 +265,7 @@ _DEFAULTS: dict[str, Any] = {
     "background.alignment_max_upward_rate_per_sec": 0.01,
     "background.alignment_hold_frames": 2,
     "self_filter.enabled": False,
+    "self_filter.urdf_path": "",
     "self_filter.mode": "tf_spheres",
     "self_filter.link_frames": [],
     "self_filter.link_radii_m": [],
@@ -459,6 +462,10 @@ class EdgeTAMPointCloudTrackerNode(Node):
         self._tf_timeout = float(self._p("frames.tf_timeout_sec"))
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
+        self._urdf_self_filter = None
+        if self._p("self_filter.urdf_path"):
+            from realtime_safety.edgetam_tracker.urdf_self_filter import UrdfSelfFilter
+            self._urdf_self_filter = UrdfSelfFilter(str(self._p("self_filter.urdf_path")))
 
         workspace_min = np.array(
             [
@@ -1485,12 +1492,24 @@ class EdgeTAMPointCloudTrackerNode(Node):
             float(value) for value in robot_origin
         )
 
-        link_spheres, link_error = self._link_spheres(
-            geometry_message.header.stamp
-        )
-        self_filter_result = self._self_filter.filter(
-            tracking_cloud, link_spheres
-        )
+        link_error = ""
+        if self._urdf_self_filter is not None:
+            from realtime_safety.ros2_bridge.robot_geometry import robot_keep_mask
+            try:
+                keep = robot_keep_mask(self._urdf_self_filter, self._tf_buffer,
+                                       tracking_cloud.points, tracking_cloud.frame_id,
+                                       Time.from_msg(geometry_message.header.stamp))
+                self_filter_result = SelfFilterResult(
+                    tracking_cloud.select(keep), SelfFilterStatus.ACTIVE,
+                    int(np.count_nonzero(~keep)), len(keep),
+                    len(self._urdf_self_filter.parts), True, "URDF collision hulls at image time",
+                )
+            except TransformException as exc:
+                self._set_pipeline_status(DiagnosticStatus.ERROR, "URDF self-filter TF unavailable; output held", tf_error=str(exc))
+                return
+        else:
+            link_spheres, link_error = self._link_spheres(geometry_message.header.stamp)
+            self_filter_result = self._self_filter.filter(tracking_cloud, link_spheres)
         if (
             self_filter_result.status is SelfFilterStatus.UNAVAILABLE
             and not self_filter_result.safe_to_continue
@@ -1518,9 +1537,23 @@ class EdgeTAMPointCloudTrackerNode(Node):
         fusion_raw_cloud = self._preprocessor.workspace_cloud(
             self_filter_result.filtered_cloud
         )
-        background_result = self._background_filter.filter(
-            self_filter_result.filtered_cloud
-        )
+        if bool(self._p("background.compensate_camera_motion")):
+            try:
+                pose = self._lookup_transform(
+                    self._base_frame, self._tracking_frame, geometry_message.header.stamp
+                )
+                translation, quaternion = self._transform_components(pose)
+                background_result = self._background_filter.filter_at_pose(
+                    self_filter_result.filtered_cloud,
+                    quaternion_matrix_xyzw(quaternion), translation,
+                )
+            except TransformException as exc:
+                self._set_pipeline_status(DiagnosticStatus.ERROR, "camera pose unavailable; output held", tf_error=str(exc))
+                return
+        else:
+            background_result = self._background_filter.filter(
+                self_filter_result.filtered_cloud
+            )
         background_trusted = _background_output_is_trusted(
             background_result.state,
             background_enabled=self._background_filter.config.enabled,

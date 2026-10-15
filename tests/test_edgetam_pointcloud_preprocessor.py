@@ -47,6 +47,24 @@ def _cloud(
     )
 
 
+def test_background_compensates_camera_pan_without_losing_new_obstacle():
+    from scipy.spatial.transform import Rotation
+    background = StaticBackgroundFilter(StaticBackgroundFilterConfig(
+        enabled=True, warmup_frames=0, calibration_frames=1,
+        minimum_baseline_points=3, voxel_size=.01, distance_threshold=.02,
+    ))
+    wall = np.array([[x, 0, 1.] for x in np.linspace(-.3, .3, 30)])
+    background.filter_at_pose(_cloud(wall), np.eye(3), np.zeros(3))
+    rotation = Rotation.from_euler("y", 25, degrees=True).as_matrix()
+    origin = np.array([.1, 0, 0])
+    hand = np.array([[0., 0., .7]])
+    optical = (np.concatenate((wall, hand)) - origin) @ rotation
+    result = background.filter_at_pose(_cloud(optical), rotation, origin)
+    assert len(result.cloud.points) == 1
+    np.testing.assert_allclose(result.cloud.points, optical[-1:], atol=1e-6)
+    assert result.cloud.source_indices.tolist() == [130]
+
+
 def test_preprocessor_keeps_cropped_high_resolution_cloud_and_metadata() -> None:
     cloud = _cloud(
         np.array(

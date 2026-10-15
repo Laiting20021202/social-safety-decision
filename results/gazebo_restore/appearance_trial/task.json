@@ -1,0 +1,65 @@
+{
+  "terminal_state": "DYNAMIC_WAIT_FOR_CLEAR_PATH",
+  "safety_state": "WARNING",
+  "transitions": [
+    "EXECUTING",
+    "PLANNING:LEFT:UNDER_ENTRY",
+    "EXECUTING",
+    "CRISIS_ESCAPE_IN_PROGRESS",
+    "EXECUTING",
+    "PLANNING:LEFT:SAFETY_EVADE",
+    "EXECUTING",
+    "CRISIS_ESCAPE_IN_PROGRESS",
+    "EXECUTING",
+    "PLANNING:LEFT:UNDER_EXIT",
+    "PLANNING_RETRY:under_exit:1",
+    "PLANNING:LEFT:UNDER_EXIT",
+    "DYNAMIC_WAIT_FOR_CLEAR_PATH"
+  ],
+  "safety_transitions": [
+    "SAFE",
+    "WARNING",
+    "PAUSE",
+    "REPLAN",
+    "WARNING",
+    "PAUSE",
+    "REPLAN",
+    "WARNING"
+  ],
+  "minimum_safety_distance_m": 0.07055404554855317,
+  "ground_truth_minimum_distance_m_evaluator_only": 1.0061021412357543,
+  "dynamic_events": [
+    "dynamic_under_route_selected,left,perception_hand_obstacle,under,-0.092,0.173,0.233,0.230,0.184,0.233,entry_progress=0.491,exit_progress=0.813",
+    "dynamic_under_waypoint_reached,left,under_approach",
+    "safety_transition,SAFE,WARNING,0.21356359585054793",
+    "safety_transition,WARNING,PAUSE,0.13866381576926853",
+    "safety_transition,PAUSE,REPLAN,0.1344547603308866",
+    "safety_transition,REPLAN,WARNING,0.14535338797737268",
+    "dynamic_under_route_selected,left,perception_hand_obstacle,side_forced_progress,-0.058,0.402,0.326,0.131,0.333,0.326,entry_progress=0.000,exit_progress=0.202",
+    "safety_transition,WARNING,PAUSE,0.13999101977644862",
+    "safety_transition,PAUSE,REPLAN,0.13576503511417848",
+    "safety_transition,REPLAN,WARNING,0.14459293504369325",
+    "dynamic_under_route_selected,left,perception_hand_obstacle,side_forced_progress,-0.105,0.403,0.377,0.122,0.333,0.377,entry_progress=-0.000,exit_progress=0.237",
+    "dynamic_under_waypoint_reached,left,under_approach",
+    "dynamic_under_waypoint_reached,left,under_entry",
+    "dynamic_under_planning_retry,left,under_exit,1,99999",
+    "dynamic_wait_for_clear_path,left"
+  ],
+  "completion_events": [],
+  "target_holding_reached": false,
+  "target_holding_error_m": {
+    "left": 0.2942051150700989,
+    "right": 0.8945093160099759
+  },
+  "post_target_avoidance_requested": true,
+  "avoidance_hold_seen": false,
+  "target_restore_seen": false,
+  "minimum_tcp_target_error_m": {
+    "left": 0.1280502643176875,
+    "right": 0.8945093087576841
+  },
+  "final_tcp_target_error_m": {
+    "left": 0.2942051150700989,
+    "right": 0.8945093160099759
+  }
+}

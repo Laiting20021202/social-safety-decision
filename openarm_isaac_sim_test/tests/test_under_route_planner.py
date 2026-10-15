@@ -257,3 +257,9 @@ def test_pose_tolerance_starts_precise_and_has_bounded_fallback() -> None:
     assert progressive_pose_tolerance(0.010, 0, 0.020) == 0.010
     assert progressive_pose_tolerance(0.010, 1, 0.020) == 0.015
     assert progressive_pose_tolerance(0.010, 4, 0.020) == 0.020
+
+
+def test_memory_of_low_table_does_not_trigger_two_dimensional_detour():
+    from openarm_sorting_task.route_planner import avoidance_route_waypoints
+    route = avoidance_route_waypoints(np.array([-.3,0,.8]),np.array([.3,0,.4]),np.array([0,0,.1]),np.array([1.,1.,.06]),collision_margin_m=.03,horizontal_clearance_m=.08,vertical_clearance_m=.04,minimum_tcp_z_m=.16,maximum_tcp_z_m=1.12,require_3d_intersection=True)
+    assert route is None

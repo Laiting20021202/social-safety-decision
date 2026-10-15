@@ -1,0 +1,44 @@
+{
+  "terminal_state": "DYNAMIC_WAIT_FOR_CLEAR_PATH",
+  "safety_state": "WARNING",
+  "transitions": [
+    "EXECUTING",
+    "PLANNING:LEFT:UNDER_ENTRY",
+    "EXECUTING",
+    "PLANNING:LEFT:UNDER_EXIT",
+    "PLANNING_RETRY:under_exit:1",
+    "PLANNING:LEFT:UNDER_EXIT",
+    "DYNAMIC_WAIT_FOR_CLEAR_PATH"
+  ],
+  "safety_transitions": [
+    "SAFE",
+    "WARNING"
+  ],
+  "minimum_safety_distance_m": 0.20440488728358008,
+  "ground_truth_minimum_distance_m_evaluator_only": 1.0061021416320457,
+  "dynamic_events": [
+    "dynamic_under_route_selected,left,perception_hand_obstacle,over,-0.227,0.021,0.282,0.204,0.036,0.282,entry_progress=0.347,exit_progress=0.779",
+    "dynamic_under_waypoint_reached,left,under_approach",
+    "safety_transition,SAFE,WARNING,0.21824928028980334",
+    "dynamic_under_waypoint_reached,left,under_entry",
+    "dynamic_under_planning_retry,left,under_exit,1,99999",
+    "dynamic_wait_for_clear_path,left"
+  ],
+  "completion_events": [],
+  "target_holding_reached": false,
+  "target_holding_error_m": {
+    "left": 0.3666023074355016,
+    "right": 0.8937011801845208
+  },
+  "post_target_avoidance_requested": true,
+  "avoidance_hold_seen": false,
+  "target_restore_seen": false,
+  "minimum_tcp_target_error_m": {
+    "left": 0.2765039818567452,
+    "right": 0.8937011800466147
+  },
+  "final_tcp_target_error_m": {
+    "left": 0.3666023074355016,
+    "right": 0.8937011801845208
+  }
+}

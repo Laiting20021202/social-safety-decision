@@ -5,6 +5,29 @@ from collections.abc import Mapping
 import numpy as np
 
 
+def nearest_box_component(centers, sizes, arm_points):
+    """Local reactive target; all other boxes remain in MoveIt's collision scene.
+
+    Unioning an entire remembered scene makes free space between disconnected
+    obstacles look occupied. Select the overlapping component nearest an arm.
+    """
+    centers, sizes = np.asarray(centers), np.asarray(sizes)
+    points = np.asarray(arm_points).reshape(-1, 3)
+    if not len(centers) or not len(points):
+        return union_axis_aligned_boxes(centers, sizes)
+    distance = np.linalg.norm(np.maximum(np.abs(centers[:, None] - points) - sizes[:, None] / 2, 0), axis=2).min(axis=1)
+    active = {int(distance.argmin())}
+    pending = list(active)
+    while pending:
+        index = pending.pop()
+        touching = np.all(np.abs(centers - centers[index]) <= (sizes + sizes[index]) / 2 + .015, axis=1)
+        for neighbor in np.flatnonzero(touching):
+            if int(neighbor) not in active:
+                active.add(int(neighbor)); pending.append(int(neighbor))
+    indices = sorted(active)
+    return union_axis_aligned_boxes(centers[indices], sizes[indices])
+
+
 def active_escape_can_continue(
     safety_state: str,
     step_kind: str | None,
@@ -33,6 +56,49 @@ def point_to_box_distance(
         return float("inf")
     outside = np.maximum(np.abs(value - box_center) - half, 0.0)
     return float(np.linalg.norm(outside))
+
+
+def reactive_escape_point(tcp, arm_points, center, size, *, side, maximum_step=.12):
+    """Bounded local goal proposal using the closest measured arm/box pair.
+
+    Inspired by DCP-RMP's local repulsion, not an implementation of its learned
+    IMPACT policy. Preserve the measured tool orientation in the ROS adapter.
+    """
+    tcp, center, size = map(lambda v: np.asarray(v, dtype=float), (tcp, center, size))
+    points = np.asarray(arm_points, dtype=float).reshape(-1, 3)
+    if not len(points): points = tcp[None, :]
+    closest = np.clip(points, center - size / 2, center + size / 2)
+    offsets = points - closest
+    index = int(np.argmin(np.linalg.norm(offsets, axis=1)))
+    distance = float(np.linalg.norm(offsets[index]))
+    away = offsets[index].copy()
+    if np.linalg.norm(away) < 1e-6:
+        away = points[index] - center
+    if np.linalg.norm(away) < 1e-6:
+        away = np.array([0., 1. if side == "left" else -1., .3])
+    # The table is below the arm. Never create a downward retreat into it.
+    away[2] = max(away[2], .03)
+    away /= np.linalg.norm(away)
+    step = float(np.clip(.22 - distance, .05, maximum_step))
+    return tcp + away * step
+
+
+def retime_local_path(positions, maximum_velocity=.4, maximum_acceleration=.8):
+    """Time-scale a continuous local joint path; return times and velocities."""
+    q = np.asarray(positions, dtype=float)
+    if q.ndim != 2 or len(q) < 2 or not np.isfinite(q).all():
+        raise ValueError("local path needs at least two finite joint waypoints")
+    dt = np.maximum(np.max(np.abs(np.diff(q, axis=0)), axis=1) / maximum_velocity, .05)
+    times = np.r_[0., np.cumsum(dt)]
+    for _ in range(4):
+        velocity = np.gradient(q, times, axis=0)
+        velocity[[0, -1]] = 0.
+        acceleration = np.diff(velocity, axis=0) / np.diff(times)[:, None]
+        factor = max(1., np.max(np.abs(velocity)) / maximum_velocity,
+                     np.sqrt(np.max(np.abs(acceleration)) / maximum_acceleration))
+        if factor <= 1.000001: break
+        times *= factor * 1.01
+    return times, velocity
 
 
 def select_evading_sides(
@@ -235,7 +301,7 @@ def union_axis_aligned_boxes(
     or cloud partitions and repeatedly invalidates an otherwise safe route.
     """
 
-    if not centers or len(centers) != len(sizes):
+    if len(centers) == 0 or len(centers) != len(sizes):
         return None
     center_values = [np.asarray(value, dtype=float).reshape(3) for value in centers]
     size_values = [np.asarray(value, dtype=float).reshape(3) for value in sizes]

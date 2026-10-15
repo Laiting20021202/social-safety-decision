@@ -1,0 +1,27 @@
+{
+  "clear_cube_points_median": 49.0,
+  "clear_frames": 16,
+  "current_frames": true,
+  "frame_ids": [
+    "world"
+  ],
+  "occluded_cube_points_median": 0.0,
+  "occluded_frames": 17,
+  "passed": true,
+  "rates_hz": {
+    "blocked": 11.201786107489063,
+    "clear": 10.65840550639964
+  },
+  "remaining_ratio": 0.0,
+  "sensor_diagnostic_only": {
+    "frames": 164,
+    "topic": "/rgbd/points_world",
+    "used_for_pass": false
+  },
+  "source": "/realtime_safety/environment_cloud_world",
+  "source_contract": "3d_safety_decision_rgb_aligned_depth_camera_info_backprojection",
+  "unique_stamp_ratios": {
+    "blocked": 1.0,
+    "clear": 1.0
+  }
+}

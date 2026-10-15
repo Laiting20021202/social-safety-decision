@@ -8,7 +8,7 @@ STATE_DIR="${OPENARM_DEMO_STATE_DIR:-${PROJECT_ROOT}/.demo}"
 LOG_DIR="${STATE_DIR}/logs"
 LAUNCH_PID_FILE="${STATE_DIR}/launch.pid"
 READY_TIMEOUT="${OPENARM_DEMO_READY_TIMEOUT:-120}"
-GUI_URL="${OPENARM_GUI_URL:-http://192.168.0.234:8080/}"
+GUI_URL="${OPENARM_GUI_URL:-http://localhost:8080/}"
 HAND_PREVIEW="${OPENARM_DEMO_HAND_PREVIEW:-1}"
 mkdir -p "${LOG_DIR}"
 
@@ -25,14 +25,38 @@ if [[ ! -x "${SOCIAL_ROOT}/scripts/run_koch_stream.sh" ]]; then
   exit 1
 fi
 
-"${PROJECT_ROOT}/scripts/stop_openarm_demo.sh" --quiet || true
-export OPENARM_SIM_ROOT="${PROJECT_ROOT}"
-python3 "${PROJECT_ROOT}/scripts/create_gazebo_world.py" >/dev/null
-python3 "${PROJECT_ROOT}/scripts/prepare_gazebo_robot.py" >/dev/null
-
 set +u
 source /opt/ros/humble/setup.bash
 set -u
+
+# Reuse the official model/assets from an existing OpenArm installation. These
+# large dependencies were not included when the demo was moved into this repo.
+# Never modify the dependency checkout; all runtime state belongs to this one.
+DEPENDENCY_ROOT="${OPENARM_DEPENDENCY_ROOT:-${REPOSITORY_ROOT}/../../sim/openarm/openarm_isaac_sim_test}"
+if [[ -f "${DEPENDENCY_ROOT}/install/setup.bash" ]]; then
+  DEPENDENCY_ROOT="$(cd "${DEPENDENCY_ROOT}" && pwd)"
+  set +u
+  source "${DEPENDENCY_ROOT}/install/setup.bash"
+  set -u
+  for asset in assets/openarm_cache assets/hand/libhand ros2_ws/src/external .demo/moveit_runtime; do
+    if [[ ! -e "${PROJECT_ROOT}/${asset}" && -e "${DEPENDENCY_ROOT}/${asset}" ]]; then
+      mkdir -p "$(dirname "${PROJECT_ROOT}/${asset}")"
+      ln -s "${DEPENDENCY_ROOT}/${asset}" "${PROJECT_ROOT}/${asset}"
+    fi
+  done
+fi
+"${PROJECT_ROOT}/scripts/stop_openarm_demo.sh" --quiet || true
+export OPENARM_SIM_ROOT="${PROJECT_ROOT}"
+export PYTHONPATH="${SOCIAL_ROOT}:${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+export ROS_LOCAL_SIM="${ROS_LOCAL_SIM:-1}"
+export KOCH_ROS_DOMAIN_ID="${KOCH_ROS_DOMAIN_ID:-79}"
+# Many ROS nodes do small NumPy matrix products. A BLAS pool per node
+# oversubscribes the host and stalls camera/control callbacks.
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+python3 "${PROJECT_ROOT}/scripts/create_gazebo_world.py" >/dev/null
+python3 "${PROJECT_ROOT}/scripts/prepare_gazebo_robot.py" >/dev/null
 
 # The host's minimal MoveIt installation omits the simple controller-manager
 # plugin. Reuse the locally extracted official Humble package so MoveIt can
@@ -51,7 +75,9 @@ if ! ros2 pkg prefix moveit_simple_controller_manager >/dev/null 2>&1; then
   unset AMENT_CURRENT_PREFIX
 fi
 
-colcon --log-base "${PROJECT_ROOT}/log" build --symlink-install \
+# Out-of-package data_files in the existing setup.py require a copy install;
+# symlink-install can create dangling launch/config links outside the package.
+colcon --log-base "${PROJECT_ROOT}/log" build \
   --packages-select \
     openarm_dynamic_avoidance \
     openarm_perception_adapter \
@@ -72,6 +98,7 @@ export CAMERA_QOS=sensor_data
 export KOCH_CONFIGURE_CAMERA=0
 export KOCH_ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
 systemctl --user set-environment \
+  ROS_LOCAL_SIM="${ROS_LOCAL_SIM}" \
   OPENARM_SIM_ROOT="${PROJECT_ROOT}" \
   CAMERA_INPUT_TOPIC="${CAMERA_INPUT_TOPIC}" \
   CAMERA_QOS="${CAMERA_QOS}" \
@@ -80,6 +107,7 @@ systemctl --user set-environment \
 systemctl --user restart realtime-safety-3d.service
 
 setsid ros2 launch openarm_sim_bringup gazebo_phase1.launch.py gui:=true rviz:=true \
+  memory_enabled:="${OPENARM_MEMORY_ENABLED:-true}" \
   >"${LOG_DIR}/gazebo_demo.log" 2>&1 &
 LAUNCH_PID=$!
 echo "${LAUNCH_PID}" >"${LAUNCH_PID_FILE}"

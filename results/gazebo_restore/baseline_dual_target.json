@@ -1,0 +1,65 @@
+{
+  "terminal_state": "TARGETS_RESTORED_HOLDING",
+  "safety_state": "SAFE",
+  "transitions": [
+    "PLANNING:LEFT:MODEL_TARGET",
+    "DYNAMIC_TARGET_RETRY:left:1",
+    "PLANNING:LEFT:MODEL_TARGET",
+    "EXECUTING",
+    "TARGETS_REACHED_HOLDING",
+    "PLANNING:RIGHT:IDLE_EVADE",
+    "CRISIS_ESCAPE_IN_PROGRESS",
+    "IDLE_AVOIDANCE_HOLD",
+    "EXECUTING",
+    "CRISIS_ESCAPE_IN_PROGRESS",
+    "IDLE_AVOIDANCE_HOLD",
+    "EXECUTING",
+    "TARGETS_RESTORED_HOLDING"
+  ],
+  "safety_transitions": [
+    "SAFE",
+    "PAUSE",
+    "REPLAN",
+    "WARNING",
+    "SAFE",
+    "PAUSE",
+    "REPLAN",
+    "WARNING",
+    "SAFE"
+  ],
+  "minimum_safety_distance_m": 0.032602508367133326,
+  "ground_truth_minimum_distance_m_evaluator_only": 0.1526992844077735,
+  "dynamic_events": [
+    "dynamic_under_route_skipped,left,no_obstacle_box",
+    "dynamic_target_planning_retry,left,1,99999",
+    "dynamic_under_route_skipped,left,no_obstacle_box",
+    "dynamic_under_route_skipped,right,no_obstacle_box",
+    "safety_transition,SAFE,PAUSE,0.03301984436243098",
+    "safety_transition,PAUSE,REPLAN,0.03289869375969831",
+    "safety_transition,REPLAN,WARNING,0.14686500813417142",
+    "safety_transition,WARNING,SAFE,0.14147280049560018",
+    "safety_transition,SAFE,PAUSE,0.13278269286216826",
+    "safety_transition,PAUSE,REPLAN,0.13213047498447555",
+    "safety_transition,REPLAN,WARNING,0.14684058218920792",
+    "safety_transition,WARNING,SAFE,0.16592131968954837"
+  ],
+  "completion_events": [
+    "motion_complete,both_targets,dynamic"
+  ],
+  "target_holding_reached": true,
+  "target_holding_error_m": {
+    "left": 0.05092894336685065,
+    "right": 0.024735854906827087
+  },
+  "post_target_avoidance_requested": true,
+  "avoidance_hold_seen": true,
+  "target_restore_seen": true,
+  "minimum_tcp_target_error_m": {
+    "left": 0.050928943366850166,
+    "right": 0.024735854906827087
+  },
+  "final_tcp_target_error_m": {
+    "left": 0.0509289433668505,
+    "right": 0.026266684184120967
+  }
+}

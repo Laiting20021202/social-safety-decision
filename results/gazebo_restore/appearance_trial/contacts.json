@@ -1,0 +1,15 @@
+{
+  "backend": "Gazebo Classic physics contact stream; evaluator only",
+  "duration_sec": 133.65888553089462,
+  "start_epoch_sec": 1790741795.0588167,
+  "end_epoch_sec": 1790741928.717705,
+  "requested_duration_sec": 360.0,
+  "stopped_by_trial_runner": true,
+  "transport_exit": -15,
+  "all_contact_reports": 114748,
+  "moving_arm_contact_reports": {},
+  "maximum_penetration_m": {},
+  "first_contact_wall_sec": {},
+  "passed": true,
+  "limitation": "Discrete physics contacts; does not measure positive clearance or prove continuous-time collision freedom. Geometry quality is the SDF collision geometry, not necessarily visual meshes."
+}

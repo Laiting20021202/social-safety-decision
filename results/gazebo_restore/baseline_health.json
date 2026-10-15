@@ -1,0 +1,107 @@
+{
+  "missing": [],
+  "counts": {
+    "camera_info": 45,
+    "production_raw_cloud": 35,
+    "clock": 30,
+    "rgb": 45,
+    "sensor_world_cloud_diagnostic": 45,
+    "depth": 45,
+    "aligned": 45,
+    "sensor_raw_cloud_diagnostic": 43,
+    "gui_rgb": 28,
+    "production_world_cloud": 34,
+    "joints": 260
+  },
+  "production_clouds": {
+    "raw": "/realtime_safety/pointcloud",
+    "world": "/realtime_safety/environment_cloud_world",
+    "contract": "3d_safety_decision_rgb_aligned_depth_camera_info_backprojection"
+  },
+  "sensor_diagnostic_only": [
+    "/rgbd/points",
+    "/rgbd/points_world"
+  ],
+  "rates_hz": {
+    "camera_info": 14.991241614452715,
+    "production_raw_cloud": 11.530277949044816,
+    "clock": 9.9821623026621,
+    "rgb": 15.006766163011854,
+    "sensor_world_cloud_diagnostic": 14.9816757254838,
+    "depth": 14.981853910531887,
+    "aligned": 14.979308125386272,
+    "sensor_raw_cloud_diagnostic": 14.330658413865626,
+    "gui_rgb": 9.502146409871571,
+    "production_world_cloud": 11.553403360630993,
+    "joints": 99.91609131707786
+  },
+  "rgb": {
+    "encoding": "rgb8",
+    "shape": [
+      480,
+      640
+    ],
+    "frame_id": "rgbd_color_optical_frame",
+    "stamp_ns": 6297000000
+  },
+  "depth": {
+    "topic": "/rgbd/aligned_depth_to_color/image_raw",
+    "encoding": "32FC1",
+    "frame_id": "rgbd_color_optical_frame",
+    "minimum_m": 0.5531530380249023,
+    "median_m": 1.0111048221588135,
+    "maximum_m": 2.6406266689300537
+  },
+  "production_raw_cloud": {
+    "frame_id": "rgbd_color_optical_frame",
+    "points": 6348,
+    "minimum_xyz": [
+      -1.6544255018234253,
+      -1.3907865285873413,
+      0.5536742806434631
+    ],
+    "median_xyz": [
+      -0.0028572878800332546,
+      -0.005535508506000042,
+      1.0156346559524536
+    ],
+    "maximum_xyz": [
+      1.8302866220474243,
+      0.3444327414035797,
+      2.6428275108337402
+    ]
+  },
+  "production_world_cloud": {
+    "frame_id": "world",
+    "points": 3763,
+    "minimum_xyz": [
+      -0.21449875831604004,
+      -0.5724294781684875,
+      0.0953255146741867
+    ],
+    "median_xyz": [
+      0.017717091366648674,
+      0.019216185435652733,
+      0.10050223022699356
+    ],
+    "maximum_xyz": [
+      0.5216147899627686,
+      0.6263796091079712,
+      0.42223015427589417
+    ]
+  },
+  "production_gate": {
+    "minimum_rate_hz": 10.0,
+    "rate_topics": [
+      "/rgbd/color/image_raw",
+      "/rgbd/aligned_depth_to_color/image_raw",
+      "/rgbd/color/camera_info",
+      "/realtime_safety/pointcloud",
+      "/realtime_safety/environment_cloud_world"
+    ],
+    "rates_ok": true,
+    "nonempty": true,
+    "frames_ok": true,
+    "passed": true
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "terminal_state": "TARGET_UNREACHABLE:left,right",
+  "safety_state": "SAFE",
+  "transitions": [
+    "EXECUTING",
+    "PLANNING:LEFT:UNDER_ENTRY",
+    "PLANNING_RETRY:under_entry:1",
+    "PLANNING:LEFT:UNDER_ENTRY",
+    "DYNAMIC_MOVED_OBSTACLE_RETRY",
+    "PLANNING:LEFT:UNDER_APPROACH",
+    "PLANNING_RETRY:under_approach:1",
+    "PLANNING:LEFT:UNDER_APPROACH",
+    "DYNAMIC_MOVED_OBSTACLE_RETRY",
+    "PLANNING:LEFT:UNDER_APPROACH",
+    "PLANNING:RIGHT:UNDER_APPROACH",
+    "EXECUTING",
+    "PLANNING:RIGHT:UNDER_EXIT",
+    "PLANNING_RETRY:under_exit:1",
+    "PLANNING:RIGHT:UNDER_EXIT",
+    "DYNAMIC_MOVED_OBSTACLE_RETRY",
+    "PLANNING:RIGHT:UNDER_APPROACH",
+    "EXECUTING",
+    "PLANNING:RIGHT:UNDER_EXIT",
+    "DYNAMIC_MOVED_OBSTACLE_RETRY",
+    "PLANNING:RIGHT:UNDER_APPROACH",
+    "PLANNING_RETRY:under_approach:1",
+    "EXECUTING",
+    "PLANNING:RIGHT:UNDER_ENTRY",
+    "EXECUTING",
+    "PLANNING:RIGHT:UNDER_EXIT",
+    "DYNAMIC_WAIT_FOR_CLEAR_PATH",
+    "TARGET_UNREACHABLE:left,right"
+  ],
+  "safety_transitions": [
+    "SAFE"
+  ],
+  "minimum_safety_distance_m": 0.2759464035476437,
+  "ground_truth_minimum_distance_m_evaluator_only": 0.48828825089542305,
+  "dynamic_events": [
+    "dynamic_under_route_selected,left,perception_hand_obstacle,over,-0.526,0.022,0.663,0.627,0.073,0.663,entry_progress=0.055,exit_progress=1.210",
+    "dynamic_under_waypoint_reached,left,under_approach",
+    "dynamic_under_planning_retry,left,under_entry,1,99999",
+    "dynamic_wait_for_clear_path,left",
+    "dynamic_moved_obstacle_retry,left",
+    "dynamic_under_route_selected,left,perception_hand_obstacle,over_progress,-0.674,0.733,0.663,0.735,0.206,0.663,entry_progress=0.000,exit_progress=1.246",
+    "dynamic_under_planning_retry,left,under_approach,1,99999",
+    "dynamic_wait_for_clear_path,left",
+    "dynamic_moved_obstacle_retry,left",
+    "dynamic_under_route_selected,left,perception_hand_obstacle,over_progress,-0.674,0.733,0.663,0.735,0.206,0.663,entry_progress=0.000,exit_progress=1.246",
+    "dynamic_wait_for_clear_path,left",
+    "dynamic_wait_retry_exhausted,left,2",
+    "dynamic_under_route_selected,right,perception_hand_obstacle,over_progress,-0.728,-0.592,0.663,0.764,-0.176,0.663,entry_progress=0.000,exit_progress=1.288",
+    "dynamic_under_waypoint_reached,right,under_approach",
+    "dynamic_under_waypoint_reached,right,under_entry",
+    "dynamic_under_planning_retry,right,under_exit,1,99999",
+    "dynamic_wait_for_clear_path,right",
+    "dynamic_moved_obstacle_retry,right",
+    "dynamic_under_route_selected,right,perception_hand_obstacle,over,-0.668,-0.227,0.663,0.773,0.303,0.663,entry_progress=0.191,exit_progress=1.726",
+    "dynamic_under_waypoint_reached,right,under_approach",
+    "dynamic_under_waypoint_reached,right,under_entry",
+    "dynamic_wait_for_clear_path,right",
+    "dynamic_moved_obstacle_retry,right",
+    "dynamic_under_route_selected,right,perception_hand_obstacle,over,-0.579,0.134,0.663,0.681,-0.028,0.663,entry_progress=0.061,exit_progress=1.331",
+    "dynamic_under_planning_retry,right,under_approach,1,-2",
+    "dynamic_under_waypoint_reached,right,under_approach",
+    "dynamic_under_waypoint_reached,right,under_entry",
+    "dynamic_wait_for_clear_path,right",
+    "dynamic_wait_retry_exhausted,right,2"
+  ],
+  "completion_events": [
+    "motion_complete,both_targets,dynamic"
+  ],
+  "target_holding_reached": true,
+  "target_holding_error_m": {
+    "left": 0.9132040979143777,
+    "right": 0.7699197204167603
+  },
+  "post_target_avoidance_requested": true,
+  "avoidance_hold_seen": false,
+  "target_restore_seen": false,
+  "minimum_tcp_target_error_m": {
+    "left": 0.913204097542696,
+    "right": 0.6834911688887532
+  },
+  "final_tcp_target_error_m": {
+    "left": 0.9132040978738829,
+    "right": 0.769919247591633
+  }
+}

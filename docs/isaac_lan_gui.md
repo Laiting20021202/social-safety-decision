@@ -2,6 +2,86 @@
 
 目前進度入口：[主 README](../README.md)／[Isaac Sim 交接清單](ISAAC_SIM_HANDOFF.md)。此 LAN viewer 尚未接通 Safety Decision 迴避。
 
+## 2026-09-23 現場相機與關節 topic
+
+目前 Isaac 發布 `/camera/front/color/image_raw`（`sensor_msgs/msg/Image`），
+沒有 `/camera/front/color/image_raw/compressed` publisher。
+`run_isaac_gui.sh` 已改為預設使用 raw topic。OpenArm 雙臂、夾爪及底盤回饋
+實際位於 `/tidybot/joint_states`，而非 `/joint_states`。
+
+```bash
+# repository 根目錄，GUI 顯示影像與估計點雲
+bash scripts/run_isaac_gui.sh
+
+# 另一個終端：只讀訂閱實際關節回饋
+source scripts/isaac_ros_env.sh
+ros2 topic echo /tidybot/joint_states sensor_msgs/msg/JointState \
+  --qos-reliability best_effort --qos-durability volatile --no-daemon
+```
+
+若 Isaac 發送端已啟動 JPEG relay，才切回 compressed；先停止舊 GUI：
+
+```bash
+ISAAC_CAMERA_TOPIC=/camera/front/color/image_raw/compressed \
+  bash scripts/run_isaac_gui.sh
+```
+
+也可用既有的 `--source ros2:///其他相機topic` 覆寫來源。
+不同相機必須搭配各自的內參，不能沿用 front 的校正數值做距離判定。
+
+## raw 影像接收卡住：Wi-Fi 分片重組
+
+**9/23 套用下述接收端設定後已恢復影像與點雲更新。** 30 秒實測收到
+141 張不同影像（4.69 Hz）、147 筆點雲（4.89 Hz，每筆 12,000 點）。
+仍有約 1 秒的最大更新間隔及少量分片重組失敗，尚非長時間穩定性驗收。
+詳見 [修復量測](../results/isaac_image_receive_2026-09-23.md)。
+
+9/23 故障取樣：25 秒收到 314 筆 JointState、152 筆 CameraInfo，
+但完整 Image 與輸出點雲均為 0；額外可靠 QoS 訂閱 15 秒也未收到影像。
+本機走 Wi-Fi，`IpReasmFails` 持續增加；當時 `ipfrag_high_thresh=4194304`
+（4 MiB）、`ipfrag_time=30`。這些證據高度指向大型 raw 影像的 IP 分片接收問題，
+不是「topic 找不到」或單純瀏覽器重新整理能解決。
+
+先在 **GUI 接收端電腦** 查詢，記下修改前的值：
+
+```bash
+sysctl net.ipv4.ipfrag_time net.ipv4.ipfrag_high_thresh
+nstat -az | rg 'IpReasm(Reqds|OKs|Fails)|UdpRcvbufErrors'
+```
+
+以下是針對本次環境的暫時診斷調整，需在本機終端輸入 sudo 密碼。
+這兩個 kernel 參數影響整台電腦的 IPv4 分片接收，非單一 ROS 節點；
+不會寫入永久設定，重開機後由原有系統設定接管：
+
+```bash
+sudo sysctl -w net.ipv4.ipfrag_time=3 net.ipv4.ipfrag_high_thresh=134217728
+```
+
+完成後保持 Isaac Play，檢查完整影像及 GUI 點雲是否持續更新：
+
+```bash
+source scripts/isaac_ros_env.sh
+timeout 15 ros2 topic echo /camera/front/color/image_raw sensor_msgs/msg/Image \
+  --qos-reliability best_effort --qos-durability volatile \
+  --no-daemon --once --no-arr
+ros2 topic hz /realtime_safety/pointcloud --wall-time
+```
+
+一次收到影像不代表穩定；須觀察連續更新及遠端相機變化。
+若改善不夠，改用有線網路，或在 **Isaac 發送端** 將影像壓縮成 JPEG 再跨網路傳送。
+在接收端才壓縮無法降低先前 raw 影像的跨網路流量。
+
+回復本次量到的原值（其他電腦請用各自事前記錄的值）：
+
+```bash
+sudo sysctl -w net.ipv4.ipfrag_time=30 net.ipv4.ipfrag_high_thresh=4194304
+```
+
+調整依據：[ROS 2 Humble 官方 DDS tuning](https://github.com/ros2/ros2_documentation/blob/humble/source/How-To-Guides/DDS-tuning.rst)。
+上述短時間量測確認影像接收恢復，不代表已完成長時間網路穩定性或避障驗收。
+
+## 先前控制停用紀錄與 GUI 操作
+
 > 2026-09-17 更新：收到非預期移動回報後，已停止本機 GUI／控制程序，並移除啟動腳本預設的 `--isaac-joint-control`。下列關節控制說明與測試是先前紀錄；目前預設啟動僅接收相機、生成及發布點雲，不建立 `/joint_command` publisher。異常原因尚未確認，請勿重新啟用控制進行移動測試。
 
 在專案根目錄啟動：

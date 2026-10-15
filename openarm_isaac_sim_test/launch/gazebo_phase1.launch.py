@@ -17,6 +17,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -57,6 +58,7 @@ def generate_launch_description() -> LaunchDescription:
         [
             DeclareLaunchArgument("gui", default_value="true"),
             DeclareLaunchArgument("rviz", default_value="true"),
+            DeclareLaunchArgument("memory_enabled", default_value="true"),
             ExecuteProcess(
                 cmd=[
                     "gazebo", "--verbose",
@@ -265,6 +267,7 @@ def generate_launch_description() -> LaunchDescription:
                         # Follow the 8080 GUI-selected EdgeTAM or MediaPipe
                         # RGB-D source through the validated obstacle mux.
                         "model_cloud_topic": "/realtime_safety/yolo_obstacles/pointcloud",
+                        "self_filter.urdf_path": str(share / "gazebo/generated/openarm_gazebo.urdf"),
                         "rgb_topic": "/rgbd/color/image_raw",
                         "rgbd_cloud_topic": "/rgbd/points",
                         "output_cloud_topic": "/edgetam_tracker/obstacle_cloud_realtime",
@@ -298,6 +301,8 @@ def generate_launch_description() -> LaunchDescription:
                 parameters=[
                     {
                         "mode": "perception",
+                        "memory_enabled": ParameterValue(LaunchConfiguration("memory_enabled"), value_type=bool),
+                        "self_filter_urdf": str(share / "gazebo/generated/openarm_gazebo.urdf"),
                         "startup_grace_sec": 30.0,
                         "prediction_horizon_sec": 2.0,
                         "maximum_obstacle_speed_mps": 0.20,

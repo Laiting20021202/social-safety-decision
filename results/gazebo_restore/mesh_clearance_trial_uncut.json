@@ -1,0 +1,13 @@
+{
+  "output": "results/gazebo_restore/mesh_clearance_trial_uncut.mp4",
+  "wall_duration_sec": 230.0157884398941,
+  "frames": 3450,
+  "fps": 15,
+  "duplicate_frames": 0,
+  "image_topic": "/rgbd/color/image_raw",
+  "label": "Geometric avoidance + visibility memory | RGB-D baseline",
+  "observer_topic": "/demo/observer/recording_camera/image_raw",
+  "encoder_exit": 0,
+  "playback": "1x wall time; no cuts",
+  "synchronization": "latest received observer and onboard images; both acquisition stamps logged"
+}

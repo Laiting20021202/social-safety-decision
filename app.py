@@ -596,7 +596,8 @@ def main() -> int:
                 dashboard.update_openarm_control_status
                 if dashboard is not None
                 else None
-            )
+            ),
+            on_memory=getattr(scene, "update_obstacle_memory", None),
         )
     if config.obstacle_perception.enabled:
         from realtime_safety.ros2_bridge.edgetam_control import (

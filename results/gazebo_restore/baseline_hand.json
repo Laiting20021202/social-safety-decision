@@ -1,0 +1,41 @@
+{
+  "backprojection_xy_median_error_m": 0.0004185624633092978,
+  "cloud_source": "3d_safety_rgb_aligned_depth_backprojection",
+  "cloud_temporal_median_delta_m": 0.0015834408113732934,
+  "depth_z_median_error_m": 0.0009992718696594238,
+  "obstacle_centroid_span_m": 0.6096643796505392,
+  "obstacle_frame": "rgbd_color_optical_frame",
+  "obstacle_points": 5540,
+  "obstacle_to_hand_nearest_m_evaluator_only": 0.013824310812294138,
+  "production_frame_ids": {
+    "raw": [
+      "rgbd_color_optical_frame"
+    ],
+    "world": [
+      "world"
+    ]
+  },
+  "production_topics": {
+    "raw": "/realtime_safety/pointcloud",
+    "world": "/realtime_safety/environment_cloud_world"
+  },
+  "rates_hz": {
+    "depth": 14.956,
+    "info": 14.95,
+    "obstacle": 13.36,
+    "raw": 10.598,
+    "rgb": 14.951,
+    "world": 10.54
+  },
+  "raw_cloud_dimensions": [
+    6348,
+    1
+  ],
+  "raw_world_exact_stamp_ratio": 1.0,
+  "rgb_depth_info_raw_exact_stamp_ratio": 0.9685,
+  "sensor_diagnostic_only": {
+    "/rgbd/points": 173,
+    "/rgbd/points_world": 168,
+    "used_for_pass": false
+  }
+}

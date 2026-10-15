@@ -7,6 +7,7 @@ import rclpy
 from geometry_msgs.msg import Pose
 from moveit_msgs.msg import CollisionObject, PlanningScene
 from rclpy.duration import Duration
+from rclpy.executors import MultiThreadedExecutor, ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2
@@ -21,6 +22,7 @@ from openarm_sim.contracts import RuntimeMode, assert_mode_isolation, subscripti
 from openarm_sim.state_machine import SafetyState
 
 from .policy import SafetyPolicy
+from .visibility_memory import VisibilityMemory, memory_collision_boxes
 from .geometry import (
     clustered_swept_boxes,
     estimate_bounded_velocity,
@@ -59,6 +61,17 @@ class SafetyBridgeNode(Node):
         self.declare_parameter("robot_capsule_radius_m", 0.05)
         self.declare_parameter("minimum_distance_quantile", 0.01)
         self.declare_parameter("collision_box_count", 3)
+        self.declare_parameter("memory_enabled", False)
+        self.declare_parameter("memory_collision_padding_m", 0.015)
+        self.declare_parameter("memory_scene_topic", "/realtime_safety/pointcloud")
+        self.declare_parameter("self_filter_urdf", "")
+        self.robot_geometry = None
+        if self.get_parameter("self_filter_urdf").value:
+            from realtime_safety.edgetam_tracker.urdf_self_filter import UrdfSelfFilter
+            self.robot_geometry = UrdfSelfFilter(str(self.get_parameter("self_filter_urdf").value))
+        self.memory = VisibilityMemory()
+        self._last_memory_render = -float("inf")
+        self.memory_enabled = bool(self.get_parameter("memory_enabled").value)
         self.mode = RuntimeMode(str(self.get_parameter("mode").value))
         expected_subscriptions = subscriptions_for_mode(self.mode)
         assert_mode_isolation(self.mode, expected_subscriptions)
@@ -98,6 +111,13 @@ class SafetyBridgeNode(Node):
         self.dynamic_obstacle_pub = self.create_publisher(
             CollisionObject, "/openarm/dynamic_avoidance/collision_object", 10
         )
+        self.memory_pub = self.create_publisher(PointCloud2, "/openarm/safety/memory_cloud", 10)
+        self.memory_status_pub = self.create_publisher(String, "/openarm/safety/memory_status", 10)
+        if self.memory_enabled:
+            self.create_subscription(
+                PointCloud2, str(self.get_parameter("memory_scene_topic").value),
+                self._scene_cloud, qos_profile_sensor_data,
+            )
         self.create_subscription(
             String, "/openarm/safety/command", self._safety_command, 10
         )
@@ -131,6 +151,9 @@ class SafetyBridgeNode(Node):
         if source not in {"ground_truth", "perception"}:
             self.get_logger().warning(f"ignored obstacle source: {source}")
             return
+        if source == self.obstacle_source:
+            return  # Repeated GUI selection must not erase occluded obstacles.
+        self.memory = VisibilityMemory()
         previous_source = self.obstacle_source
         # MoveIt's PlanningScene outlives this node.  Explicitly remove the
         # old dynamic object before changing subscriptions; merely clearing
@@ -196,9 +219,22 @@ class SafetyBridgeNode(Node):
             )
         else:
             points = np.asarray(list(rows), dtype=np.float64).reshape(-1, 3)
+        if len(points) and self.robot_geometry is not None:
+            from realtime_safety.ros2_bridge.robot_geometry import robot_keep_mask
+            try:
+                keep = robot_keep_mask(self.robot_geometry, self.tf_buffer, points,
+                                       message.header.frame_id, rclpy.time.Time.from_msg(message.header.stamp))
+                points = points[keep]
+            except Exception as error:
+                self.get_logger().warning(f"self geometry unavailable; risk held: {error}", throttle_duration_sec=2.)
+                return
         if not len(points):
             self._received_observation = True
+            if self.memory_enabled and self.memory.cells:
+                self._publish_memory(refresh_liveness=True)
+                return
             self.policy.observe(float("inf"), self._now())
+            self.last_distance = float("inf")
             if (
                 self._perception_obstacle_present
                 or self._perception_cleanup_pending
@@ -212,16 +248,12 @@ class SafetyBridgeNode(Node):
             self._publish_policy()
             return
         try:
-            # The Gazebo camera is an operator-editable kinematic model and
-            # ModelStates has no acquisition timestamp.  Its broadcaster can
-            # therefore only represent the current extrinsic calibration,
-            # not a truthful historical pose for each RGB-D stamp.  Transform
-            # every fresh measured cloud with that latest calibration.  An
-            # unavailable transform still remains fail-safe via the timeout.
+            # Delayed inference must use the camera pose at image time, not
+            # its new pose after a pan. Missing historical TF holds risk.
             transform = self.tf_buffer.lookup_transform(
                 self.planning_frame,
                 message.header.frame_id,
-                rclpy.time.Time(),
+                rclpy.time.Time.from_msg(message.header.stamp),
                 timeout=Duration(seconds=0.05),
             )
         except Exception as error:
@@ -237,6 +269,8 @@ class SafetyBridgeNode(Node):
         )
         if stamp_sec <= 0.0:
             stamp_sec = self._now()
+        if self._last_obstacle_stamp_sec is not None and stamp_sec <= self._last_obstacle_stamp_sec:
+            return
         world_points, measured_center, center_limited = limit_cloud_center_motion(
             world_points,
             self._last_obstacle_center,
@@ -254,6 +288,12 @@ class SafetyBridgeNode(Node):
                 "bounded implausible perception-cloud center jump",
                 throttle_duration_sec=1.0,
             )
+            if self.memory_enabled:
+                # The legacy display stabilizer TRANSLATES an implausible
+                # cloud. Those invented positions cannot become world memory.
+                # Retain the last observation until a consistent one arrives.
+                self._publish_memory(refresh_liveness=True)
+                return
         lower = np.quantile(world_points, 0.02, axis=0)
         upper = np.quantile(world_points, 0.98, axis=0)
         measured_size = np.maximum(upper - lower, 0.025)
@@ -275,6 +315,13 @@ class SafetyBridgeNode(Node):
         )
         self._last_obstacle_center = measured_center.copy()
         self._last_obstacle_stamp_sec = stamp_sec
+        if self.memory_enabled:
+            self.memory.observe(world_points, stamp_sec, self._obstacle_velocity)
+            self._publish_memory(refresh_liveness=True)
+            return
+        self._publish_obstacle_points(world_points)
+
+    def _publish_obstacle_points(self, world_points, uncertainty=0.0, refresh_liveness=True):
         horizon = max(
             float(self.get_parameter("prediction_horizon_sec").value), 0.0
         )
@@ -282,7 +329,7 @@ class SafetyBridgeNode(Node):
             float(self.get_parameter("perception_obstacle_padding_m").value),
             0.0,
         )
-        boxes = clustered_swept_boxes(
+        boxes = memory_collision_boxes(world_points, uncertainty, padding=float(self.get_parameter("memory_collision_padding_m").value)) if self.memory_enabled else clustered_swept_boxes(
             world_points,
             self._obstacle_velocity,
             horizon,
@@ -299,7 +346,17 @@ class SafetyBridgeNode(Node):
         self._perception_obstacle_present = True
         self._perception_cleanup_pending = False
         link_chains = self._robot_link_chains()
-        if link_chains:
+        if self.robot_geometry is not None:
+            from realtime_safety.ros2_bridge.robot_geometry import robot_transforms
+            try:
+                transforms = robot_transforms(self.robot_geometry, self.tf_buffer, self.planning_frame, rclpy.time.Time())
+                links = {name for name in self.robot_geometry.link_names if name.startswith(("openarm_left_", "openarm_right_"))}
+                distances = self.robot_geometry.clearance_lower_bound(world_points, transforms, links)
+                self.last_distance = float(np.min(distances))
+            except Exception as error:
+                self.get_logger().warning(f"robot clearance unavailable: {error}", throttle_duration_sec=3.)
+                return
+        elif link_chains:
             # The swept boxes above are deliberately predictive so MoveIt can
             # route around where the hand is going.  Emergency-stop distance,
             # however, must describe the obstacle *now*.  Feeding future
@@ -316,6 +373,8 @@ class SafetyBridgeNode(Node):
                     self.get_parameter("minimum_distance_quantile").value
                 ),
             )
+            # Per-cell bounds are used by collision geometry; applying the
+            # oldest distant cell's bound to this minimum creates false stops.
         else:
             # A freshly started TransformListener needs a few camera frames to
             # fill its cache.  Do not latch a false E-stop during the explicit
@@ -331,8 +390,67 @@ class SafetyBridgeNode(Node):
         # received before those checks caused a fresh node to bypass startup
         # grace, time out, and latch a false emergency stop.
         self._received_observation = True
+        previous_observation = self.policy.last_observation_sec
         self.policy.observe(self.last_distance, self._now())
+        if not refresh_liveness:
+            self.policy.last_observation_sec = previous_observation
+        if self.memory.capacity_exceeded and self.policy.state != SafetyState.EMERGENCY_STOP:
+            self.policy.state = SafetyState.PAUSE
         self._publish_policy()
+
+    def _scene_cloud(self, message):
+        if self.obstacle_source != "perception" or not self.memory.cells:
+            return
+        stamp = message.header.stamp.sec + message.header.stamp.nanosec * 1e-9
+        if self._now() - stamp > 0.5 or stamp > self._now() + 0.05:
+            return
+        try:
+            tf = self.tf_buffer.lookup_transform(
+                self.planning_frame, message.header.frame_id,
+                rclpy.time.Time.from_msg(message.header.stamp),
+                timeout=Duration(seconds=0.01),
+            ).transform
+            records = point_cloud2.read_points(message, field_names=("x", "y", "z"), skip_nans=True)
+            rows = np.column_stack([records[name] for name in ("x", "y", "z")])
+            origin = _transform_points(np.zeros((1, 3)), tf)[0]
+            rotation = (_transform_points(np.eye(3), tf) - origin).T
+            self.memory.carve(rows, rotation, origin, stamp)
+        except Exception as error:
+            self.get_logger().warning(f"memory visibility held: {error}", throttle_duration_sec=3.0)
+
+    def _publish_memory(self, refresh_liveness=False):
+        from std_msgs.msg import Header
+        if not refresh_liveness and self._now() - self._last_memory_render < .1:
+            return
+        self._last_memory_render = self._now()
+        points, ages, uncertainty = self.memory.snapshot(self._now())
+        header = Header(frame_id=self.planning_frame, stamp=self.get_clock().now().to_msg())
+        # This topic is explicitly memory, never recycled as a fresh observation.
+        self.memory_pub.publish(point_cloud2.create_cloud_xyz32(header, points.tolist()))
+        status = (
+            f"{'REMEMBERED' if len(ages) and max(ages) > 0.5 else 'OBSERVED'} "
+            f"voxels={len(self.memory.cells)} "
+            f"oldest_s={max(ages, default=0):.2f} "
+            f"uncertainty_bound_m={max(uncertainty, default=0):.3f}"
+        ) if len(points) else "CLEAR (measured rays confirmed)"
+        if self.memory.capacity_exceeded:
+            status += " CAPACITY_EXCEEDED_UNKNOWN"
+            self.policy.state = SafetyState.PAUSE
+        self.memory_status_pub.publish(String(data=status))
+        if len(points):
+            self._publish_obstacle_points(points, uncertainty, refresh_liveness)
+        elif self._perception_obstacle_present:
+            self._remove_obstacle("perception_hand_obstacle")
+            self._perception_obstacle_present = False
+            self.last_distance = float("inf")
+            # Keep watchdog age independent of the visibility / memory timer.
+            previous = self.policy.last_observation_sec
+            self.policy.observe(self.last_distance, self._now())
+            if not refresh_liveness:
+                self.policy.last_observation_sec = previous
+            self._last_obstacle_center = None
+            self._last_obstacle_stamp_sec = None
+            self._obstacle_velocity.fill(0.0)
 
     def _robot_link_chains(self) -> list[np.ndarray]:
         chains: list[np.ndarray] = []
@@ -362,6 +480,8 @@ class SafetyBridgeNode(Node):
         return np.concatenate(chains, axis=0)
 
     def _timer(self) -> None:
+        if self.memory_enabled and self.obstacle_source == "perception":
+            self._publish_memory()
         if (
             not self._received_observation
             and self._now() - self._startup_sec
@@ -487,11 +607,16 @@ def _transform_points(points: np.ndarray, transform: Any) -> np.ndarray:
 def main() -> None:
     rclpy.init()
     node = SafetyBridgeNode()
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
+        # TF listener callbacks must run while a perception callback waits for
+        # the transform bracketing its image timestamp.
+        executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

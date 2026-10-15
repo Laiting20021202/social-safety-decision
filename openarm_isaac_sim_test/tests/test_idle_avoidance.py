@@ -1,6 +1,25 @@
 from __future__ import annotations
 
 import numpy as np
+from openarm_sorting_task.idle_avoidance import reactive_escape_point, retime_local_path
+
+
+def test_reactive_goal_is_small_and_away_from_close_forearm():
+    tcp = np.array([.2, .2, .6])
+    points = np.array([[.05, .2, .5], tcp])
+    goal = reactive_escape_point(tcp, points, np.array([-.1, .2, .5]), np.array([.1, .1, .1]), side="left")
+    assert goal[0] > tcp[0]
+    assert 0 < np.linalg.norm(goal - tcp) <= .120001
+    assert goal[2] >= tcp[2]
+
+
+def test_local_path_retiming_bounds_velocity_and_acceleration():
+    q = np.array([[0., 0.], [.03, -.02], [.09, -.04], [.10, -.05]])
+    times, velocity = retime_local_path(q, .4, .8)
+    assert np.all(np.diff(times) > 0)
+    assert np.max(np.abs(velocity)) <= .4
+    assert np.max(np.abs(np.diff(velocity, axis=0) / np.diff(times)[:, None])) <= .8
+    np.testing.assert_allclose(velocity[[0, -1]], 0)
 
 from openarm_sorting_task.idle_avoidance import (
     active_escape_can_continue,
@@ -219,3 +238,19 @@ def test_safety_evade_preserves_interrupted_home() -> None:
         ("right", "home"),
         ("left", "model_target"),
     ]
+
+
+def test_remembered_obstacle_gaps_do_not_become_one_reactive_wall():
+    from openarm_sorting_task.idle_avoidance import nearest_box_component
+    centers = np.array([[0, 0, 0], [.06, 0, 0], [1, 0, 0]])
+    sizes = np.full((3, 3), .07)
+    center, size = nearest_box_component(centers, sizes, [[0, .2, 0]])
+    assert size[0] < .15
+    assert center[0] < .1
+
+
+def test_reactive_step_uses_original_distance_before_normalizing_direction():
+    from openarm_sorting_task.idle_avoidance import reactive_escape_point
+    tcp = np.array([.11, 0, .4])
+    goal = reactive_escape_point(tcp, tcp[None], [0,0,.4], [.1,.1,.1], side='left', maximum_step=.12)
+    np.testing.assert_allclose(np.linalg.norm(goal-tcp), .12)

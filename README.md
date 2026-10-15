@@ -1,6 +1,6 @@
 # Social Safety Decision — OpenArm／Isaac Sim 交接
 
-最後整理：**2026-09-22**。本週目標：將模擬環境完整切換到 Isaac Sim，讓假人把手伸到 OpenArm 前方，由既有 Safety Decision 觸發機械手臂迴避，並留下可重現的測試證據。
+最後整理：**2026-09-30**。本週目標：將模擬環境完整切換到 Isaac Sim，讓假人把手伸到 OpenArm 前方，由既有 Safety Decision 觸發機械手臂迴避，並留下可重現的測試證據。
 
 **目前尚未完成 Isaac Sim 感知 → Safety Decision → OpenArm 迴避的端到端驗收。**
 既有 Gazebo 整合、Isaac 場景／ROS bridge 原始碼、Isaac LAN 影像與估計點雲可以接續使用；看到點雲或手動關節移動，不等於避障閉環完成。
@@ -16,7 +16,7 @@ GitHub：[Laiting20021202/social-safety-decision](https://github.com/Laiting2002
 | RGB-D、EdgeTAM／MediaPipe、人手點雲與追蹤 | 已有程式與單元測試；Gazebo 歷史整合見 [紀錄](openarm_isaac_sim_test/docs/HANDOFF_STATUS.md) | 在 Isaac 的同步 RGB-D、TF 下重驗 |
 | Safety Decision、MoveIt 動態迴避／回復 | 已有 `openarm_safety_bridge`、`openarm_dynamic_avoidance`、`openarm_sorting_task` | 接上 Isaac trajectory action，驗證取消、迴避、回復與逾時停止 |
 | Isaac 原生場景與 ROS bridge | 原始碼存在；歷史場景 smoke 有紀錄，本次未重跑 runtime | 重建資產、核對現行場景、相機與控制介面 |
-| Isaac LAN 三路 RGB／前相機估計點雲 | 9/17 曾量測約 4.95 Hz、每筆 12,000 點；[歷史結果](results/isaac_lan_readiness_2026-09-17.json) | 補 aligned metric depth、相機外參與手部障礙管線 |
+| Isaac LAN 三路 RGB／前相機估計點雲 | 9/17 曾量測約 4.95 Hz、每筆 12,000 點；9/30 已填入前相機對底盤外參；[歷史結果](results/isaac_lan_readiness_2026-09-17.json) | 補 aligned metric depth、校正 RGB 估計點雲尺度與手部障礙管線 |
 | Isaac LAN 關節步進面板 | 保留實驗程式，**預設停用**；9/17 有非預期移動回報，原因未確認 | 先釐清控制來源／joint mapping／部分關節指令語意，再做隔離模擬測試 |
 | 假人伸手 → 感知 → OpenArm 迴避 | **未驗收**；現有資產以 LibHand 手掌／碰撞代理為主，非完整假人 | 補完整假人或確認展示資產，移植人手測試並保存證據 |
 | 本次離線測試 | 主程式 **310 passed, 1 skipped**；模擬／控制 **105 passed** | [重現指令與驗證範圍](results/repo_handoff_2026-09-22.md) |
@@ -52,19 +52,157 @@ bash scripts/check_repo.sh
 
 模型、第三方 repo、USD、ROS build/install 與錄影／rosbag 不在 Git；模型與模擬環境的補齊指令見 [交接清單](docs/ISAAC_SIM_HANDOFF.md)。本機雖有 `moveit_ros_move_group`，系統 ROS prefix 尚找不到 `moveit_simple_controller_manager`，不可把單元測試通過當成 runtime 已備妥。
 
-## Isaac LAN：目前可用的影像／點雲入口
+## 每次啟動：Isaac 相機＋點雲 GUI
 
-遠端 Isaac 必須播放並發布 `/camera/front/color/image_raw/compressed`。首次使用須先依交接清單下載 Video Depth 模型。
+適用於 9/23 已實測成功的現有電腦環境；新電腦須先完成前述安裝與模型下載。
+這是 Safety Decision 專案的 **影像／點雲 viewer**，完整機械手臂避障的狀態另見下一節。
+
+### 1. Isaac 電腦：開場景並按 Play
+
+兩台電腦接同一 LAN，Isaac 的 ROS domain 設為 `0`。目前場景的實際介面是：
+
+| 用途 | Topic | 型別 |
+|---|---|---|
+| 前方相機 | `/camera/front/color/image_raw` | `sensor_msgs/msg/Image` |
+| 前方相機參數 | `/camera/front/color/camera_info` | `sensor_msgs/msg/CameraInfo` |
+| OpenArm／底盤關節回饋 | `/tidybot/joint_states` | `sensor_msgs/msg/JointState` |
+| 模擬時間 | `/clock` | `rosgraph_msgs/msg/Clock` |
+| 本機重建點雲（GUI 啟動後） | `/realtime_safety/pointcloud` | `sensor_msgs/msg/PointCloud2` |
+
+目前沒有 compressed 相機 publisher；GUI 預設接 raw。前方相機須隨 Isaac Play 持續發布。
+
+### 2. GUI 電腦：重開機後套用影像接收設定
+
+在 David 這台電腦的終端執行一次；**不是在 Isaac 電腦執行**。
+目前同一次開機若已套用 `3`／`134217728`，可略過 sudo 指令：
 
 ```bash
-# repository 根目錄；此預設入口不建立 /joint_command publisher
+sysctl net.ipv4.ipfrag_time net.ipv4.ipfrag_high_thresh
+sudo sysctl -w net.ipv4.ipfrag_time=3 net.ipv4.ipfrag_high_thresh=134217728
+```
+
+密碼輸入在終端。這是整台接收端的暫時 IPv4 分片設定，解決本次 Wi-Fi raw 影像
+長時間收不完整的問題；未寫入永久設定。回復原值與細節見 [LAN 說明](docs/isaac_lan_gui.md)。
+
+### 3. 終端 A：啟動 GUI，保持終端運行
+
+```bash
+cd /home/david/Desktop/laiting/itri/3d_safety_decision/realtime_3d_safety_decision
 bash scripts/run_isaac_gui.sh
 ```
 
-開啟 <http://localhost:8080/>，其他電腦用本機當前 LAN IP。
-此模式使用 **domain 0／Fast DDS**，是 RGB 估計深度、未校正尺度的點雲；沒有啟用手部偵測、MoveIt 或 Safety Decision 閉環。
-請勿加入 `--isaac-joint-control` 進行例行交接測試；非預期移動仍待釐清。
-完整連線診斷與歷史限制見 [Isaac LAN 說明](docs/isaac_lan_gui.md)。
+腳本會自行設定 Humble、domain 0／Fast DDS，並使用專案 `.venv` 啟動相機接收、
+GPU 深度估計、點雲生成與網頁服務。瀏覽器開啟 <http://localhost:8080/>，
+在 **Camera Input** 看 RGB 畫面，主視窗看彩色點雲。
+
+另一個終端也可直接開瀏覽器：
+
+```bash
+xdg-open http://localhost:8080/
+```
+
+其他電腦用 `http://<GUI電腦當前LAN-IP>:8080/`；本機執行 `hostname -I` 可查 IP。
+若 GUI 已運行，直接開網頁即可，不要再啟動第二份程式佔用 8080。
+
+### 4. 終端 B：訂閱關節（選用，不影響 GUI 影像）
+
+```bash
+cd /home/david/Desktop/laiting/itri/3d_safety_decision/realtime_3d_safety_decision
+source scripts/isaac_ros_env.sh
+ros2 topic echo /tidybot/joint_states sensor_msgs/msg/JointState \
+  --qos-reliability best_effort --qos-durability volatile --no-daemon
+```
+
+`name[i]` 對應 `position[i]`，旋轉關節使用 rad。這個命令只讀回饋，不發送控制。
+它也不會把關節資料送進 GUI；目前 `isaac_lan` 關閉 OpenArm 模型疊圖與控制。
+
+### 5. 終端 C：確認相機與點雲更新（選用）
+
+```bash
+cd /home/david/Desktop/laiting/itri/3d_safety_decision/realtime_3d_safety_decision
+source scripts/isaac_ros_env.sh
+ros2 topic list -t --no-daemon --spin-time 10
+
+# 檢查一張完整相機訊息，省略巨大的影像資料陣列
+timeout 15 ros2 topic echo /camera/front/color/image_raw sensor_msgs/msg/Image \
+  --qos-reliability best_effort --qos-durability volatile \
+  --no-daemon --once --no-arr
+
+# 持續監看點雲接收率，Ctrl+C 結束
+ros2 topic hz /realtime_safety/pointcloud --wall-time
+```
+
+9/23 修復後量到影像約 4.69 Hz、點雲約 4.89 Hz，每筆 12,000 點；這是當時的
+量測，不是保證 FPS。看到 topic 名稱不等於收到完整影像。若再次卡住，依
+[LAN 排查步驟](docs/isaac_lan_gui.md) 檢查；證據見 [修復紀錄](results/isaac_image_receive_2026-09-23.md)。
+
+所有 Isaac 監看終端都 source `isaac_ros_env.sh`。不要混用 `ros2_lan_env.sh`／
+`run_koch_stream.sh`，它們會切換到舊 domain 42／Cyclone DDS。
+
+### 停止與下次重啟
+
+在終端 A 按 `Ctrl+C` 停止 GUI，在 B／C 按 `Ctrl+C` 停止各自的監看。
+關閉瀏覽器不會停止後端。下次仍在同一次開機，只需確認 Isaac Play 並重做步驟 3；
+重開機後先重做步驟 2。若之後重新啟用 systemd 背景 GUI，手動啟動前需先停止該服務。
+
+## Tidybot 底盤：1 公尺內障礙觸發反向 2 公尺退避（9/30）
+
+新增獨立底盤退避節點，與 OpenArm 關節避障分開。先啟動上面的 GUI，再開一個終端：
+
+```bash
+cd /home/david/Desktop/laiting/itri/3d_safety_decision/realtime_3d_safety_decision
+bash scripts/run_tidybot_retreat.sh
+```
+
+**目前預設為 dry-run，不發送 `/tidybot/cmd_vel`**；讀取點雲與
+`/tidybot/joint_states`，在 `/realtime_safety/tidybot_retreat/status` 顯示擬發送速度。
+Isaac 的相機外參、body-frame Twist、位置回饋、公尺單位與 0.5 秒接收端 watchdog 已確認。
+實際移動前仍須校正 **RGB 單目估計點雲的公尺尺度**，並在當下場景確認整條 2 m 退路；
+這兩項未標記驗證時 `--execute` 會拒絕啟動。
+
+完成確認後，`--execute` 才會發布 Twist：連續 3 張點雲確認 1 m 內障礙，
+以位置回饋朝觸發方向的反方向移動 2 m（目標容差 3 cm），到達／異常時送零速。
+完成後需明確 reset，不會持續反覆後退。
+9/30 已用獨立測試點雲完成左右兩向的真實 Isaac 閉環：兩趟均進入 `DONE`，
+終點分別距 2 m 目標 2.66 cm 與 2.96 cm；[驗證紀錄](results/tidybot_retreat_2026-09-30.md)。
+這證明底盤命令與位置回饋，但不代表正式 RGB 估計點雲的尺度已驗證。
+完整設定、停止／reset 與驗證說明見 [Tidybot 退避操作](docs/TIDYBOT_RETREAT.md)。
+
+## Safety Decision：OpenArm 完整避障要另外完成哪些步驟？
+
+**上述 GUI 指令沒有啟用手部偵測、安全決策或 OpenArm 自動迴避。**
+`configs/isaac_lan.yaml` 是 `mode: reconstruction`，且 `obstacle_perception.enabled`
+與 `openarm.enabled` 均為 `false`。目前點雲為 RGB 估計深度；退避設定已有相機外參，
+但尺度尚未驗證，OpenArm 避障鏈也尚未完成相同座標整合。
+單純加入 `--mode safety` 或 `--isaac-joint-control` 不會補齊 Isaac 閉環；
+後者仍有先前非預期移動問題待釐清。
+
+Isaac 完整避障須依序完成以下整合，**目前還沒有已驗收的一鍵啟動命令**：
+
+1. Isaac 發布同步 metric depth＋RGB＋CameraInfo，核對相機到機器人 TF 與尺度。
+2. 啟動手部感知／EdgeTAM 與 adapter，持續輸出 `/perception/obstacles`。
+3. 整合 `openarm_safety_bridge`、`openarm_dynamic_avoidance`、MoveIt 與 `pose_goal`。
+4. 將現場 `/tidybot/joint_states` 接到控制鏈所需的關節介面，接通 Isaac trajectory
+   action；`/tidybot/joint_command` 的 JointState 不是 `FollowJointTrajectory` action。
+5. 驗證伸手時實際迴避、撤手後回復，以及輸入過期時停止。
+
+各步的程式位置、launch 缺口與驗收方式見 [Isaac 交接清單](docs/ISAAC_SIM_HANDOFF.md)。
+
+若要回歸**先前的 Gazebo 完整避障版本**，先完成子專案 README 的資產、模型、
+ROS workspace、MoveIt controller plugin 與 `realtime-safety-3d.service` 環境準備。
+停止上述 Isaac GUI 後，在獨立終端執行以下歷史入口；此流程會啟動模擬控制及移動測試，
+不是把既有 LAN Isaac 場景接入 Safety Decision：
+
+```bash
+cd /home/david/Desktop/laiting/itri/3d_safety_decision/realtime_3d_safety_decision/openarm_isaac_sim_test
+OPENARM_GUI_URL=http://localhost:8080/ bash scripts/start_gazebo_demo.sh
+# 必須等到 OPENARM GAZEBO DEMO READY，才執行下列測試
+bash scripts/run_dynamic_avoidance_test.sh
+# 測試結束、需要停止 demo 時
+bash scripts/stop_gazebo_demo.sh
+```
+
+以上 Gazebo runtime 本次未重跑；前置與操作見 [模擬專案 README](openarm_isaac_sim_test/README.md)。
 
 ## 本週工作順序與完成定義
 

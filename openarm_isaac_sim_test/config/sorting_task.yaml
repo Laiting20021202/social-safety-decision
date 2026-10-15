@@ -117,6 +117,9 @@ always_on_avoidance:
 # blocked; only this escape trajectory may bypass the dynamic output gate.
 crisis_avoidance:
   enabled: true
+  reactive_local_goal: true
+  cartesian_local_path: true
+  maximum_local_step_m: 0.12
   minimum_lift_m: 0.16
   horizontal_escape_m: 0.10
   vertical_clearance_m: 0.14

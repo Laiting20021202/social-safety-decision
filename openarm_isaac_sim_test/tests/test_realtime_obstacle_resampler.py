@@ -167,3 +167,17 @@ def test_mask_metric_support_rejects_wrong_depth_and_position() -> None:
         lower=np.asarray([-0.1, -0.1, 0.4]),
         upper=np.asarray([0.1, 0.1, 0.6]),
     ) == 1
+
+
+def test_colour_support_rejects_flow_drift_onto_robot_and_goal_marker():
+    from openarm_perception_adapter.realtime_obstacle_resampler import appearance_support
+    seed = np.full((10, 10, 3), [170, 80, 45], np.uint8)
+    _, palette = appearance_support(seed, np.ones((10, 10), bool))
+    current = np.array([[[175, 85, 47], [0, 230, 0], [100, 100, 100], [0, 0, 230]]], np.uint8)
+    keep, _ = appearance_support(current, palette=palette)
+    assert keep.tolist() == [[True, False, False, False]]
+    # This is appearance continuity, not a fixed skin-colour detector.
+    seed[:] = [0, 0, 230]
+    _, blue_palette = appearance_support(seed, np.ones((10,10), bool))
+    keep, _ = appearance_support(current, palette=blue_palette)
+    assert keep[0,3] and not keep[0,0]

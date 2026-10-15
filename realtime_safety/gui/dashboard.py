@@ -666,6 +666,7 @@ class Dashboard:
             "task": "WAITING",
             "safety": "WAITING",
             "dynamic": "WAITING",
+            "memory": "disabled / waiting",
             "hand": "WAITING",
             "command": "none",
         }
@@ -748,6 +749,7 @@ class Dashboard:
         self.openarm_control_status.content = (
             f"Task: **{status['task']}** · Safety: **{status['safety']}**  \n"
             f"Dynamic: **{status['dynamic']}**  \n"
+            f"Obstacle memory (orange; current detections pink): **{status['memory']}**  \n"
             f"Hand: **{status['hand']}**  \n"
             f"Last command: `{status['command']}`"
         )

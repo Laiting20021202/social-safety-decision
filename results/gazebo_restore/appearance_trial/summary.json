@@ -1,0 +1,12 @@
+{
+  "task_passed": false,
+  "contact_check_passed": true,
+  "video_encoded": true,
+  "controller": "geometric + visibility memory; no trained action policy",
+  "perception": "RGB-D baseline (simulated depth); not RGB-only",
+  "base_commit": "29b2e994f85e4c2b4cbcbcd00d0833010f4854cf",
+  "working_tree_modified": true,
+  "task_configuration_sha256": "11c7dd3d6cb66339177ec6356e9b25cad32f344c7f4631e143584e9b9c1753ce",
+  "seed": 20260817,
+  "passed": false
+}

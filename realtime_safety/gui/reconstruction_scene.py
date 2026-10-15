@@ -587,6 +587,20 @@ class ReconstructionScene3D:
             if openarm_pose is not None and self._openarm is not None:
                 self._openarm.update_simulator_model_pose(*openarm_pose)
 
+    def update_obstacle_memory(self, points: np.ndarray) -> None:
+        """World-aligned safety cache, separate from current pink detections."""
+        with self._lock:
+            if self._closed or not self._sim_debug_enabled:
+                return
+            previous = getattr(self, "_obstacle_memory_handle", None)
+            if previous is not None:
+                previous.remove()
+            self._obstacle_memory_handle = self.server.scene.add_point_cloud(
+                "/sim_debug/world/obstacle_memory",
+                points=np.asarray(points, dtype=np.float32).reshape(-1, 3),
+                colors=(255, 175, 35), point_size=.007, point_shape="rounded",
+            )
+
     def update_simulator_debug_cloud(
         self,
         points: np.ndarray,

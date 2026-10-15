@@ -15,6 +15,9 @@ if [[ -f "${LOCAL_ROS_SETUP}" ]]; then
   source "${LOCAL_ROS_SETUP}"
   set -u
 fi
+# Prefer current Python source while retaining built ROS message interfaces.
+# Colcon's old per-file symlinks do not include newly added Python modules.
+export PYTHONPATH="${ROOT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 PYTHON="${ROOT_DIR}/.venv/bin/python"
 if [[ ! -x "${PYTHON}" ]]; then
   PYTHON="python3"
@@ -152,6 +155,7 @@ if [[ "${CAMERA_INPUT_TOPIC}" == /rgbd/* ]]; then
       -p workspace.min_z:=0.1
       -p workspace.max_z:=3.0
       -p background.depth_axis:=2
+      -p background.compensate_camera_motion:=true
       -p background.horizontal_axis:=0
       -p background.vertical_axis:=1
       -p projection.camera_axis_mode:=ros_optical
@@ -159,6 +163,7 @@ if [[ "${CAMERA_INPUT_TOPIC}" == /rgbd/* ]]; then
       # Remove OpenArm returns before foreground clustering so the moving
       # white/black grippers cannot become hand candidates.
       -p self_filter.enabled:=true
+      -p "self_filter.urdf_path:=${OPENARM_SIM_ROOT}/gazebo/generated/openarm_gazebo.urdf"
       -p self_filter.link_frames:="[openarm_left_link0,openarm_left_link1,openarm_left_link2,openarm_left_link3,openarm_left_link4,openarm_left_link5,openarm_left_link6,openarm_left_link7,openarm_left_hand,openarm_left_left_finger,openarm_left_right_finger,openarm_right_link0,openarm_right_link1,openarm_right_link2,openarm_right_link3,openarm_right_link4,openarm_right_link5,openarm_right_link6,openarm_right_link7,openarm_right_hand,openarm_right_left_finger,openarm_right_right_finger]"
       -p self_filter.link_radii_m:="[0.080,0.115,0.094,0.186,0.119,0.136,0.076,0.099,0.085,0.093,0.093,0.080,0.115,0.094,0.186,0.119,0.136,0.076,0.099,0.085,0.093,0.093]"
       -p self_filter.padding:=0.005

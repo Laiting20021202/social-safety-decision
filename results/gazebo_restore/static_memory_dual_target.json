@@ -1,0 +1,49 @@
+{
+  "terminal_state": "DYNAMIC_WAIT_FOR_CLEAR_PATH",
+  "safety_state": "WARNING",
+  "transitions": [
+    "EXECUTING",
+    "CRISIS_ESCAPE_IN_PROGRESS",
+    "PLANNING:LEFT:UNDER_APPROACH",
+    "PLANNING_RETRY:under_approach:1",
+    "PLANNING:LEFT:UNDER_APPROACH",
+    "DYNAMIC_WAIT_FOR_CLEAR_PATH"
+  ],
+  "safety_transitions": [
+    "SAFE",
+    "WARNING",
+    "PAUSE",
+    "REPLAN",
+    "WARNING"
+  ],
+  "minimum_safety_distance_m": 0.1158196182430721,
+  "ground_truth_minimum_distance_m_evaluator_only": 1.0061021416915066,
+  "dynamic_events": [
+    "dynamic_under_route_selected,left,perception_hand_obstacle,under,-0.091,0.173,0.234,0.229,0.184,0.234,entry_progress=0.493,exit_progress=0.814",
+    "dynamic_under_waypoint_reached,left,under_approach",
+    "safety_transition,SAFE,WARNING,0.21326303019985407",
+    "safety_transition,WARNING,PAUSE,0.12531197401913205",
+    "safety_transition,PAUSE,REPLAN,0.12476943604192206",
+    "safety_transition,REPLAN,WARNING,0.1436347652852731",
+    "dynamic_under_route_selected,left,perception_hand_obstacle,side_forced_progress,0.227,0.077,0.661,0.244,0.118,0.661,entry_progress=0.000,exit_progress=0.044",
+    "dynamic_under_planning_retry,left,under_approach,1,99999",
+    "dynamic_wait_for_clear_path,left"
+  ],
+  "completion_events": [],
+  "target_holding_reached": false,
+  "target_holding_error_m": {
+    "left": 0.2726960141422338,
+    "right": 0.8952729864292058
+  },
+  "post_target_avoidance_requested": true,
+  "avoidance_hold_seen": false,
+  "target_restore_seen": false,
+  "minimum_tcp_target_error_m": {
+    "left": 0.17549217716427842,
+    "right": 0.8952729862994093
+  },
+  "final_tcp_target_error_m": {
+    "left": 0.2726960141422338,
+    "right": 0.8952729864292058
+  }
+}

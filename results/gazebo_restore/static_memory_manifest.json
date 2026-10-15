@@ -1,0 +1,21 @@
+{
+  "epoch": 1790741411.2661502,
+  "base_commit": "29b2e994f85e4c2b4cbcbcd00d0833010f4854cf",
+  "working_tree_modified": true,
+  "sha256": {
+    "realtime_safety/edgetam_tracker/urdf_self_filter.py": "4573b72835bc1b32825dccabe19f65cb95353f905c61352f96e049c31f2c513f",
+    "realtime_safety/ros2_bridge/robot_geometry.py": "658c90103f736d4b6ac377e84e4ba06af53d004b8386628b32acbbe764a027c9",
+    "openarm_isaac_sim_test/ros2_ws/src/openarm_safety_bridge/openarm_safety_bridge/node.py": "8746b1e7abe2cedd00b3c6f4ac1ace4bcefa5cc386e3b38aba5b83b87f587be3",
+    "openarm_isaac_sim_test/ros2_ws/src/openarm_safety_bridge/openarm_safety_bridge/visibility_memory.py": "9501503a31036238f4e1b4a106e68ccd74cd78288e6485b504ead90b56cc694e",
+    "openarm_isaac_sim_test/ros2_ws/src/openarm_sorting_task/openarm_sorting_task/pose_goal.py": "9b7db2bdf3c4f58a8f22c07db224d7c84f3299356fc7a19c85edccacc037f3f4",
+    "openarm_isaac_sim_test/ros2_ws/src/openarm_sorting_task/openarm_sorting_task/idle_avoidance.py": "df60cecd190017599bb09c959c8080312124880f89c3433795e1df9e971c13d9",
+    "openarm_isaac_sim_test/config/sorting_task.yaml": "11c7dd3d6cb66339177ec6356e9b25cad32f344c7f4631e143584e9b9c1753ce",
+    "openarm_isaac_sim_test/config/safety_zones.yaml": "e0103c3ecf10f41b96aee7b3da3164d7bf322442d5de6aedb636cc5e6c592c7b",
+    "openarm_isaac_sim_test/config/scene.yaml": "94402d4a8d9c77a604ce2c5a736b41f4713ad5306e190954d9b4ea44388408a2"
+  },
+  "seed": 20260817,
+  "perception": "restored RGB-D baseline; simulated depth, not RGB-only",
+  "controller": "geometric reactive avoidance + visibility memory; no trained action network",
+  "hand": "LibHand mesh; baseline box collision proxy does NOT cover every finger",
+  "observer": "recording-only camera /demo/observer/recording_camera/image_raw"
+}

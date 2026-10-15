@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import sys
 from typing import Any
 
 
@@ -11,6 +12,12 @@ class SharedRos2Runtime:
         import rclpy
         from rclpy.context import Context
         from rclpy.executors import MultiThreadedExecutor
+
+        # NumPy projection repeatedly releases/reacquires the GIL. With the
+        # default 5 ms quantum, unrelated GUI/model Python work can turn an
+        # 11 ms projection into ~90 ms of wall time in this shared process.
+        # A shorter quantum improves callback scheduling, not sensor rate.
+        sys.setswitchinterval(min(sys.getswitchinterval(), 0.001))
 
         context = Context()
         rclpy.init(args=[], context=context)

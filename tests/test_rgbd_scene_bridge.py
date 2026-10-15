@@ -182,3 +182,16 @@ def test_live_link_pose_converts_optical_forward_to_world_link_x() -> None:
 
     np.testing.assert_allclose(world[0].points, [[2.0, 2.0, 3.0]], atol=1e-6)
 
+
+def test_delayed_image_uses_capture_pose_after_camera_turn():
+    bridge = RgbdImageSceneBridge("/c", "/d", "/i", lambda _: None, None,
+                                  camera_pose_topic="/pose")
+    bridge.update_camera_pose(np.zeros(3), np.array([0, 0, 0, 1]), stamp=1., pose_is_optical=True)
+    bridge.update_camera_pose(np.ones(3), np.array([0, 0, 1, 0]), stamp=1.1, pose_is_optical=True)
+    position, rotation = bridge._pose_for_stamp(1.05)
+    np.testing.assert_allclose(position, np.zeros(3))
+    np.testing.assert_allclose(rotation, np.eye(3))
+    with pytest.raises(ValueError, match="future"):
+        bridge._pose_for_stamp(.9)
+    with pytest.raises(ValueError, match="stale"):
+        bridge._pose_for_stamp(3.)
