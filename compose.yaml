@@ -1,0 +1,64 @@
+name: social-safety-decision
+
+x-ros-env: &ros-env
+  ROS_DOMAIN_ID: ${OPENARM_ROS_DOMAIN_ID:-87}
+  ROS_LOCALHOST_ONLY: ${OPENARM_ROS_LOCALHOST_ONLY:-0}
+  RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+  FASTRTPS_DEFAULT_PROFILES_FILE: /opt/social-safety-decision/docker/fastdds.xml
+
+services:
+  control:
+    build:
+      context: .
+      target: control
+    image: social-safety-decision-control:humble
+    init: true
+    environment: *ros-env
+    command:
+      - ros2
+      - launch
+      - openarm_control_bringup
+      - control.launch.py
+      - backend:=${OPENARM_BACKEND:-isaac}
+      - perception:=${OPENARM_PERCEPTION:-demo_rgbd}
+      - start_task:=${OPENARM_START_TASK:-auto}
+      - obstacle_cloud_topic:=${OPENARM_OBSTACLE_CLOUD_TOPIC:-/edgetam_tracker/obstacle_cloud}
+      - safety_config:=${OPENARM_SAFETY_CONFIG:-default}
+      - robot_config:=${OPENARM_ROBOT_CONFIG:-default}
+      - task_config:=${OPENARM_TASK_CONFIG:-default}
+    volumes:
+      - ${OPENARM_CONFIG_DIR:-./docker/config}:/runtime-config:ro
+      - ${OPENARM_RESULTS_DIR:-./outputs}:/output
+
+  isaac:
+    profiles: [isaac]
+    build:
+      context: .
+      target: isaac
+    image: social-safety-decision-isaac:4.5.0
+    init: true
+    gpus: all
+    environment:
+      <<: *ros-env
+      ACCEPT_EULA: ${ACCEPT_EULA:-}
+      PRIVACY_CONSENT: ${PRIVACY_CONSENT:-N}
+      NVIDIA_DRIVER_CAPABILITIES: all
+      OPENARM_CAMERA_FPS: ${OPENARM_CAMERA_FPS:-15}
+    command:
+      - /isaac-sim/python.sh
+      - scripts/run_sim.py
+      - --headless
+      - --mode
+      - perception
+      - --scenario
+      - ${OPENARM_ISAAC_SCENARIO:-no_obstacle}
+      - --hand-visual
+      - ${OPENARM_HAND_VISUAL:-demo_marker}
+    volumes:
+      - isaac-cache:/root/.cache
+      - isaac-kit-cache:/isaac-sim/kit/cache
+      - ${OPENARM_RESULTS_DIR:-./outputs}:/output
+
+volumes:
+  isaac-cache:
+  isaac-kit-cache:

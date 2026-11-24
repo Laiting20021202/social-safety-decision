@@ -30,6 +30,8 @@ class RgbdMaskAdapter(Node):
     optional HSV fallback is deliberately disabled and labeled non-formal.
     """
 
+    _PENDING_FRAMES = 8
+
     def __init__(self) -> None:
         super().__init__("openarm_rgbd_mask_adapter")
         self.declare_parameter("input_mode", "mask")
@@ -38,9 +40,11 @@ class RgbdMaskAdapter(Node):
             "obstacle_cloud_topic", "/edgetam_tracker/obstacle_cloud"
         )
         self.declare_parameter("allow_hsv_placeholder", False)
+        self.declare_parameter("demo_marker_mask", False)
         self.declare_parameter("voxel_stride", 2)
         self.declare_parameter("timeout_sec", 0.25)
         self.allow_hsv = bool(self.get_parameter("allow_hsv_placeholder").value)
+        self.demo_marker = bool(self.get_parameter("demo_marker_mask").value)
         self.input_mode = str(self.get_parameter("input_mode").value).strip().lower()
         if self.input_mode not in {"mask", "social_cloud"}:
             raise ValueError("input_mode must be mask or social_cloud")
@@ -76,7 +80,7 @@ class RgbdMaskAdapter(Node):
             self.create_subscription(
                 CameraInfo, "/rgbd/color/camera_info", self._info, qos_profile_sensor_data
             )
-            if not self.allow_hsv:
+            if not (self.allow_hsv or self.demo_marker):
                 self.create_subscription(
                     Image,
                     str(self.get_parameter("mask_topic").value),
@@ -98,37 +102,54 @@ class RgbdMaskAdapter(Node):
         self.last_output_ns = self.get_clock().now().nanoseconds
 
     def _color(self, message: Image) -> None:
-        key = _stamp_key(message)
-        self.inputs.setdefault(key, SyncedInputs()).color = message
-        self._try_process(key)
+        self._queue_input("color", message)
 
     def _depth(self, message: Image) -> None:
-        key = _stamp_key(message)
-        self.inputs.setdefault(key, SyncedInputs()).depth = message
-        self._try_process(key)
+        self._queue_input("depth", message)
 
     def _mask(self, message: Image) -> None:
+        self._queue_input("mask", message)
+
+    def _queue_input(self, field: str, message: Image) -> None:
         key = _stamp_key(message)
-        self.inputs.setdefault(key, SyncedInputs()).mask = message
-        self._try_process(key)
+        setattr(self.inputs.setdefault(key, SyncedInputs()), field, message)
+        for old_key in sorted(self.inputs)[:-self._PENDING_FRAMES]:
+            del self.inputs[old_key]
+        if key in self.inputs:
+            self._try_process(key)
 
     def _info(self, message: CameraInfo) -> None:
         self.latest_info = message
+        for key in sorted(self.inputs):
+            self._try_process(key)
 
     def _try_process(self, key: tuple[int, int]) -> None:
         bundle = self.inputs[key]
         if bundle.color is None or bundle.depth is None or self.latest_info is None:
             return
-        if bundle.mask is None and not self.allow_hsv:
+        if bundle.mask is None and not (self.allow_hsv or self.demo_marker):
             return
-        color = _decode_color(bundle.color)
-        depth = _decode_depth(bundle.depth)
-        mask = _decode_mask(bundle.mask) if bundle.mask is not None else _skin_hsv_placeholder(color)
-        if mask.shape != depth.shape:
-            self.get_logger().error("mask and aligned depth dimensions differ")
-            del self.inputs[key]
-            return
+        del self.inputs[key]
         info = self.latest_info
+        try:
+            color = _decode_color(bundle.color)
+            depth = _decode_depth(bundle.depth)
+            if bundle.mask is not None:
+                mask = _decode_mask(bundle.mask)
+                mask_source = "external_mask"
+            elif self.demo_marker:
+                mask = _demo_marker_mask(color)
+                mask_source = "demo_marker"
+            else:
+                mask = _skin_hsv_placeholder(color)
+                mask_source = "hsv_placeholder"
+            if mask.shape != depth.shape or depth.shape != (info.height, info.width):
+                raise ValueError("mask, aligned depth and CameraInfo dimensions differ")
+            if not np.any(np.isfinite(depth) & (depth > 0)):
+                raise ValueError("aligned depth has no valid measurements")
+        except ValueError as error:
+            self.get_logger().warning(str(error), throttle_duration_sec=2.0)
+            return
         intrinsics = PinholeIntrinsics(
             width=int(info.width),
             height=int(info.height),
@@ -146,12 +167,9 @@ class RgbdMaskAdapter(Node):
         self.cloud_pub.publish(cloud)
         self._publish_marker(points, header)
         self.events_pub.publish(
-            String(data=f"perception_output,{len(points)},{'hsv_placeholder' if self.allow_hsv else 'external_mask'}")
+            String(data=f"perception_output,{len(points)},{mask_source}")
         )
         self.last_output_ns = self.get_clock().now().nanoseconds
-        del self.inputs[key]
-        for old_key in sorted(self.inputs)[:-5]:
-            self.inputs.pop(old_key, None)
 
     def _publish_marker(self, points: np.ndarray, header: Header) -> None:
         if len(points) == 0:
@@ -225,6 +243,11 @@ def _skin_hsv_placeholder(rgb: np.ndarray) -> np.ndarray:
     green = values[..., 1] / total
     blue = values[..., 2] / total
     return (red > 0.38) & (green > 0.23) & (green < 0.38) & (blue < 0.30)
+
+
+def _demo_marker_mask(rgb: np.ndarray) -> np.ndarray:
+    red, green, blue = rgb.astype(np.int16).transpose(2, 0, 1)
+    return (red > 90) & (blue > 90) & (np.minimum(red, blue) > 2 * green + 20)
 
 
 def main() -> None:

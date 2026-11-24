@@ -1,6 +1,7 @@
 import pytest
 
 from openarm_sim.config import load_yaml
+from openarm_sim.hand_runtime import HandRuntime
 from openarm_sim.scenario import HandTrajectory, MotionPhase, bounded_step, load_scenario
 from openarm_sim_bringup.gazebo_hand_controller import (
     GazeboHandController,
@@ -79,3 +80,16 @@ def test_hand_controller_integrates_simulation_time() -> None:
     assert bounded_sim_dt(10.0, 10.05) == pytest.approx(0.05)
     assert bounded_sim_dt(10.0, 10.5) == pytest.approx(0.1)
     assert bounded_sim_dt(10.0, 9.0) == 0.0
+
+
+def test_isaac_hand_runtime_can_switch_scenario_and_resume_after_pause() -> None:
+    runtime = HandRuntime("no_obstacle")
+    held, reset = runtime.step(0.02, "HOME", ["scenario:right_side_sweep", "pause"], None)
+    assert reset is False
+    assert runtime.scenario_time == 0.0
+    assert held.phase is MotionPhase.WAITING
+    moved, reset = runtime.step(2.0, "HOME", ["resume"], None)
+    assert reset is False
+    assert moved.phase is MotionPhase.MOVING_IN
+    advanced, _ = runtime.step(0.1, "HOME", [], None)
+    assert advanced.position != moved.position

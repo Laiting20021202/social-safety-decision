@@ -45,6 +45,8 @@ class SafetyBridgeNode(Node):
     def __init__(self) -> None:
         super().__init__("openarm_safety_bridge")
         self.declare_parameter("mode", "ground_truth")
+        self.declare_parameter("allow_obstacle_source_switch", True)
+        self.declare_parameter("require_fresh_perception", False)
         self.declare_parameter("config", str(PROJECT_ROOT / "config/safety_zones.yaml"))
         self.declare_parameter("startup_grace_sec", 5.0)
         self.declare_parameter("perception_obstacle_padding_m", 0.03)
@@ -96,6 +98,10 @@ class SafetyBridgeNode(Node):
         self.policy.last_observation_sec = self._now()
         self._startup_sec = self._now()
         self._received_observation = False
+        self.require_fresh_perception = bool(self.get_parameter("require_fresh_perception").value)
+        self._last_measurement_stamp_sec: float | None = None
+        if self.require_fresh_perception and self.mode is RuntimeMode.PERCEPTION:
+            self.policy.state = SafetyState.PAUSE
         self.planning_frame = self.config["frames"]["planning"]
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -130,9 +136,10 @@ class SafetyBridgeNode(Node):
         self._obstacle_velocity = np.zeros(3, dtype=float)
         self.obstacle_source = ""
         self._obstacle_subscriptions: list[Any] = []
-        self.create_subscription(
-            String, "/openarm/obstacle_source", self._obstacle_source_command, 10
-        )
+        if self.get_parameter("allow_obstacle_source_switch").value:
+            self.create_subscription(
+                String, "/openarm/obstacle_source", self._obstacle_source_command, 10
+            )
         self._set_obstacle_source(self.mode.value)
         self.create_service(Trigger, "/openarm/safety/reset_estop", self._reset_estop)
         self.create_timer(0.05, self._timer)
@@ -198,6 +205,7 @@ class SafetyBridgeNode(Node):
         self._perception_cleanup_pending = source == "perception"
         self._last_obstacle_center = None
         self._last_obstacle_stamp_sec = None
+        self._last_measurement_stamp_sec = None
         self._obstacle_velocity.fill(0.0)
         self.policy.last_observation_sec = self._now()
         self.get_logger().info(f"safety obstacle source: {source}")
@@ -209,6 +217,18 @@ class SafetyBridgeNode(Node):
         self._publish_policy()
 
     def _perception_cloud(self, message: PointCloud2) -> None:
+        stamp_sec = float(message.header.stamp.sec) + float(message.header.stamp.nanosec) * 1e-9
+        now = self._now()
+        if self.require_fresh_perception and (
+            stamp_sec <= 0.0
+            or not -0.20 <= now - stamp_sec <= self.policy.timeout_sec
+            or (
+                self._last_measurement_stamp_sec is not None
+                and stamp_sec <= self._last_measurement_stamp_sec
+            )
+        ):
+            self.get_logger().warning("ignoring stale or invalid obstacle timestamp", throttle_duration_sec=2.0)
+            return
         rows = point_cloud2.read_points(
             message, field_names=("x", "y", "z"), skip_nans=True
         )
@@ -229,6 +249,7 @@ class SafetyBridgeNode(Node):
                 self.get_logger().warning(f"self geometry unavailable; risk held: {error}", throttle_duration_sec=2.)
                 return
         if not len(points):
+            self._last_measurement_stamp_sec = stamp_sec
             self._received_observation = True
             if self.memory_enabled and self.memory.cells:
                 self._publish_memory(refresh_liveness=True)
@@ -263,14 +284,11 @@ class SafetyBridgeNode(Node):
             )
             return
         world_points = _transform_points(points, transform.transform)
-        stamp_sec = (
-            float(message.header.stamp.sec)
-            + float(message.header.stamp.nanosec) * 1e-9
-        )
         if stamp_sec <= 0.0:
-            stamp_sec = self._now()
+            stamp_sec = now
         if self._last_obstacle_stamp_sec is not None and stamp_sec <= self._last_obstacle_stamp_sec:
             return
+        self._last_measurement_stamp_sec = stamp_sec
         world_points, measured_center, center_limited = limit_cloud_center_motion(
             world_points,
             self._last_obstacle_center,

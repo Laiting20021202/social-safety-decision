@@ -38,6 +38,7 @@ class DynamicAvoidanceNode(Node):
     def __init__(self) -> None:
         super().__init__("openarm_dynamic_avoidance")
         self.declare_parameter("obstacle_source", "ground_truth")
+        self.declare_parameter("allow_obstacle_source_switch", True)
         self.declare_parameter("robot_model", "")
         self.declare_parameter("guarded_route_velocity_scale", 0.50)
         self.declare_parameter("obstacle_clear_hold_sec", 0.75)
@@ -56,8 +57,9 @@ class DynamicAvoidanceNode(Node):
             "/realtime_safety/environment_cloud_world",
         )
         self.source = ""
-        self.safety_state = "SAFE"
-        self.velocity_scale = 1.0
+        source_switch_allowed = bool(self.get_parameter("allow_obstacle_source_switch").value)
+        self.safety_state = "SAFE" if source_switch_allowed else "PAUSE"
+        self.velocity_scale = 1.0 if source_switch_allowed else 0.0
         self.current_positions: dict[str, float] = {}
         self.pending: JointTrajectory | None = None
         self.environment_points = 0
@@ -134,9 +136,10 @@ class DynamicAvoidanceNode(Node):
         self.create_subscription(
             Float64, "/openarm/safety/velocity_scaling", self._scaling, 10
         )
-        self.create_subscription(
-            String, "/openarm/obstacle_source", self._source_command, 10
-        )
+        if source_switch_allowed:
+            self.create_subscription(
+                String, "/openarm/obstacle_source", self._source_command, 10
+            )
         self.create_subscription(String, "/openarm/events", self._event, 50)
         robot_model = str(self.get_parameter("robot_model").value)
         if robot_model and not Path(robot_model).is_file():

@@ -1,0 +1,3 @@
+services:
+  control:
+    network_mode: host

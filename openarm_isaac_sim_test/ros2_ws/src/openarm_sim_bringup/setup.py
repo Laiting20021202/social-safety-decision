@@ -51,6 +51,7 @@ setup(
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
+            "isaac_planning_scene = openarm_sim_bringup.isaac_planning_scene:main",
             "gazebo_rgbd_adapter = openarm_sim_bringup.gazebo_rgbd_adapter:main",
             "gazebo_home_pose = openarm_sim_bringup.gazebo_home_pose:main",
             "gazebo_hand_controller = openarm_sim_bringup.gazebo_hand_controller:main",

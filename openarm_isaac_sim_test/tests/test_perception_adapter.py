@@ -22,3 +22,8 @@ def test_xyz_points_accepts_humble_structured_cloud(monkeypatch) -> None:
     np.testing.assert_allclose(points, [[1, 2, 3], [4, 5, 6]])
     assert points.dtype == np.float32
 
+
+def test_demo_marker_mask_rejects_brown_table_and_skin_colors() -> None:
+    rgb = np.array([[[210, 35, 212], [94, 66, 50], [165, 100, 72]]], dtype=np.uint8)
+    assert node._demo_marker_mask(rgb).tolist() == [[True, False, False]]
+
