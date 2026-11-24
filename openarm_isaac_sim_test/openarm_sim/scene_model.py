@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -10,6 +12,39 @@ class CubeSpec:
     name: str
     color: str
     position: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class BoxSpec:
+    name: str
+    position: np.ndarray
+    size: np.ndarray
+    yaw: float
+
+
+def workstation_boxes(scene_config: dict[str, Any]) -> tuple[BoxSpec, BoxSpec]:
+    table = scene_config["table"]
+    center = np.asarray(table["center"], dtype=float)
+    size = np.asarray(table["size"], dtype=float)
+    edge = table["yellow_edge"]
+    yaw = math.radians(float(table.get("yaw_deg", 0.0)))
+    edge_offset = (float(edge["width"]) - size[1]) / 2.0
+    edge_center = np.array(
+        [
+            center[0] - math.sin(yaw) * edge_offset,
+            center[1] + math.cos(yaw) * edge_offset,
+            float(table["top_z"]) + float(edge["height"]) / 2.0,
+        ]
+    )
+    return (
+        BoxSpec("table", center, size, yaw),
+        BoxSpec(
+            "yellow_table_edge",
+            edge_center,
+            np.asarray([size[0], edge["width"], edge["height"]], dtype=float),
+            yaw,
+        ),
+    )
 
 
 def deterministic_cube_layout(scene_config: dict[str, object]) -> list[CubeSpec]:

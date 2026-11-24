@@ -8,7 +8,6 @@ import rclpy
 import yaml
 from action_msgs.msg import GoalStatus
 from control_msgs.action import FollowJointTrajectory
-from gazebo_msgs.msg import ModelStates
 from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.srv import GetCartesianPath
@@ -65,16 +64,21 @@ CRISIS_STEP_KINDS = frozenset({"safety_evade", "idle_evade"})
 
 
 class OpenArmPoseGoal(Node):
-    """Plan collision-aware left/right TCP motions to Gazebo target markers."""
+    """Plan collision-aware TCP motions to ROS poses or legacy Gazebo markers."""
 
     def __init__(self) -> None:
         super().__init__("openarm_pose_goal")
         self.declare_parameter("config", str(PROJECT_ROOT / "config/sorting_task.yaml"))
+        self.declare_parameter("robot_config", str(PROJECT_ROOT / "config/openarm.yaml"))
         self.declare_parameter("planner_mode", "moveit")
+        self.declare_parameter("target_source", "gazebo")
         self._config = yaml.safe_load(
             Path(str(self.get_parameter("config").value)).read_text()
         )
-        self._robot = load_yaml("config/openarm.yaml")["robot"]
+        self._robot = load_yaml(str(self.get_parameter("robot_config").value))["robot"]
+        target_source = self.get_parameter("target_source").value
+        if target_source not in {"pose", "gazebo"}:
+            raise ValueError("target_source must be pose or gazebo")
         self._target: PoseStamped | None = None
         self._targets: dict[str, PoseStamped] = {}
         self._active_side = "left"
@@ -84,7 +88,7 @@ class OpenArmPoseGoal(Node):
         self._planner_mode = str(self.get_parameter("planner_mode").value).strip().lower()
         if self._planner_mode not in {"moveit", "dynamic"}:
             raise ValueError("planner_mode must be moveit or dynamic")
-        self._safety_state = "SAFE"
+        self._safety_state = "PAUSE" if target_source == "pose" else "SAFE"
         self._state = "IDLE"
         self._joint_names: set[str] = set()
         self._joint_positions: dict[str, float] = {}
@@ -133,7 +137,10 @@ class OpenArmPoseGoal(Node):
             PoseStamped, "/openarm/dynamic_avoidance/target_pose", 10
         )
         self.create_subscription(PoseStamped, "/openarm/target_pose", self._target_pose, 10)
-        self.create_subscription(ModelStates, "/gazebo/model_states", self._model_states, 10)
+        if target_source == "gazebo":
+            from gazebo_msgs.msg import ModelStates
+
+            self.create_subscription(ModelStates, "/gazebo/model_states", self._model_states, 10)
         self.create_subscription(String, "/openarm/task/command", self._command, 10)
         self.create_subscription(String, "/openarm/planner/mode", self._planner, 10)
         self.create_subscription(String, "/openarm/safety/state", self._safety, 10)
@@ -175,11 +182,9 @@ class OpenArmPoseGoal(Node):
             for side in ("left", "right")
         }
         self.create_timer(0.2, self._publish_state)
-        self.get_logger().info(
-            "Dual TCP target planner ready; targets follow direct Gazebo model edits"
-        )
+        self.get_logger().info(f"TCP target planner ready with {target_source} targets")
 
-    def _model_states(self, message: ModelStates) -> None:
+    def _model_states(self, message: Any) -> None:
         by_name = dict(zip(message.name, message.pose, strict=True))
         targets: dict[str, PoseStamped] = {}
         for side, model_name in self._config["target_models"].items():

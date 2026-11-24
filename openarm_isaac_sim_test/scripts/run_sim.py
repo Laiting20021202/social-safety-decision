@@ -18,6 +18,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=("ground_truth", "perception"), default="ground_truth")
     parser.add_argument("--scenario", default="no_obstacle")
     parser.add_argument("--no-ros", action="store_true")
+    parser.add_argument(
+        "--hand-visual", choices=("skin", "demo_marker"), default="skin",
+        help="Use a colored obstacle for the Docker RGB-D demonstration",
+    )
     parser.add_argument("--max-steps", type=int, default=0, help="0 runs until the app closes")
     parser.add_argument("--export", type=Path)
     parser.add_argument("--capture-dir", type=Path)
@@ -34,23 +38,18 @@ def main() -> int:
     args = parse_args()
     from isaacsim import SimulationApp
 
-    simulation_app = SimulationApp({"headless": args.headless})
+    simulation_app = SimulationApp({"headless": args.headless, "fast_shutdown": False})
     bridge = None
     exit_code = 0
     try:
         import numpy as np
 
         from openarm_sim.config import load_yaml
+        from openarm_sim.hand_runtime import HandRuntime
         from openarm_sim.isaac_scene import IsaacSceneBuilder, save_stage
-        from openarm_sim.scenario import (
-            HandTrajectory,
-            MotionPhase,
-            ScenarioSample,
-            bounded_step,
-            load_scenario,
-        )
+        from openarm_sim.scenario import MotionPhase
 
-        builder = IsaacSceneBuilder()
+        builder = IsaacSceneBuilder(demo_marker=args.hand_visual == "demo_marker")
         built = builder.build()
         contact_reporter = None
         contact_body_paths: list[str] = []
@@ -60,14 +59,7 @@ def main() -> int:
             print(f"CONTACT_REPORT_BODIES {len(contact_body_paths)}", flush=True)
             built.world.reset()
             builder._set_robot_home(built.robot)
-        active_scenario = args.scenario
-        hand_trajectory = HandTrajectory(load_scenario(active_scenario))
-        # Manual reset/withdraw always returns to the shared off-table park,
-        # independent of whichever scripted scenario was selected last.
-        manual_park = np.asarray(
-            HandTrajectory(load_scenario("no_obstacle")).parked_position,
-            dtype=float,
-        )
+        hand = HandRuntime(args.scenario)
         physics_dt = float(load_yaml("config/scene.yaml")["physics"]["dt"])
         camera_config = load_yaml("config/camera.yaml")["camera"]
         # The configured rate is the production default.  A lower override is
@@ -77,6 +69,7 @@ def main() -> int:
         if camera_fps <= 0.0:
             raise ValueError("OPENARM_CAMERA_FPS must be greater than zero")
         camera_period_steps = max(1, round(1.0 / (physics_dt * camera_fps)))
+        camera_config["fps"] = 1.0 / (physics_dt * camera_period_steps)
         if not args.no_ros:
             from openarm_isaac_bridge.runtime import IsaacRosBridge
 
@@ -93,95 +86,31 @@ def main() -> int:
             )
         step = 0
         task_state = "HOME"
-        scenario_time = 0.0
-        scenario_paused = False
-        last_sample = hand_trajectory.sample(0.0, task_state=task_state)
-        manual_enabled = False
-        manual_speed = 0.3
-        manual_target = np.asarray(last_sample.position, dtype=float)
-        workspace_min = np.asarray(
-            load_yaml("config/hand_scenarios.yaml")["defaults"]["manual_workspace_min"],
-            dtype=float,
-        )
-        workspace_max = np.asarray(
-            load_yaml("config/hand_scenarios.yaml")["defaults"]["manual_workspace_max"],
-            dtype=float,
-        )
-        last_hand_phase = last_sample.phase
+        last_hand_phase = hand.sample.phase
+        hand_events = {
+            MotionPhase.MOVING_IN: "hand_motion_started",
+            MotionPhase.HOLDING: "hand_entered",
+            MotionPhase.MOVING_OUT: "hand_withdraw_started",
+            MotionPhase.COMPLETE: "hand_withdrawn",
+        }
         local_commands: list[str] = []
         ui_window = None if args.headless else _create_ui(local_commands)
         while simulation_app.is_running() and (args.max_steps <= 0 or step < args.max_steps):
             sim_time = step * physics_dt
             commands = list(local_commands)
             local_commands.clear()
+            target = None
             if bridge is not None:
                 commands.extend(bridge.consume_hand_commands())
                 target = bridge.consume_manual_hand_target()
-                if target is not None:
-                    manual_target = np.clip(
-                        np.asarray(target, dtype=float), workspace_min, workspace_max
-                    )
-            for command in commands:
-                parts = command.lower().split(":", maxsplit=1)
-                action = parts[0]
-                if action == "scenario" and len(parts) == 2:
-                    active_scenario = parts[1]
-                    hand_trajectory = HandTrajectory(load_scenario(active_scenario))
-                    scenario_time = 0.0
-                    manual_enabled = False
-                    manual_target = np.asarray(hand_trajectory.parked_position)
-                elif action == "manual" and len(parts) == 2:
-                    manual_enabled = parts[1] == "on"
-                elif action == "speed" and len(parts) == 2:
-                    requested_speed = float(parts[1])
-                    if requested_speed not in {0.1, 0.3, 0.6}:
-                        raise ValueError(f"unsupported manual hand speed: {requested_speed}")
-                    manual_speed = requested_speed
-                elif action in {"start", "trigger", "trigger_hand"}:
-                    hand_trajectory.trigger(scenario_time)
-                elif action == "withdraw":
-                    if manual_enabled:
-                        manual_target = manual_park.copy()
-                    else:
-                        hand_trajectory.withdraw(scenario_time, last_sample.position)
-                elif action == "reset_hand":
-                    manual_enabled = True
-                    manual_target = manual_park.copy()
-                elif action == "pause":
-                    scenario_paused = True
-                elif action == "resume":
-                    scenario_paused = False
-                elif action == "reset":
-                    built.world.reset()
-                    hand_trajectory = HandTrajectory(load_scenario(active_scenario))
-                    scenario_time = 0.0
-                    manual_enabled = False
-                    manual_target = np.asarray(hand_trajectory.parked_position)
-            if not scenario_paused:
-                scenario_time += physics_dt
-            if manual_enabled:
-                position = bounded_step(
-                    last_sample.position, manual_target, manual_speed, physics_dt
-                )
-                moving = not np.allclose(position, manual_target, atol=1e-6)
-                sample = ScenarioSample(
-                    position,
-                    MotionPhase.MOVING_IN if moving else MotionPhase.HOLDING,
-                    0,
-                )
-            else:
-                sample = hand_trajectory.sample(scenario_time, task_state=task_state)
+            sample, reset_world = hand.step(physics_dt, task_state, commands, target)
+            if reset_world:
+                built.world.reset()
             if bridge is not None and sample.phase is not last_hand_phase:
-                event = {
-                    MotionPhase.MOVING_IN: "hand_motion_started",
-                    MotionPhase.HOLDING: "hand_entered",
-                    MotionPhase.MOVING_OUT: "hand_withdraw_started",
-                    MotionPhase.COMPLETE: "hand_withdrawn",
-                }.get(sample.phase)
+                event = hand_events.get(sample.phase)
                 if event is not None:
-                    bridge.publish_event(event, active_scenario, str(sample.cycle))
+                    bridge.publish_event(event, hand.scenario, str(sample.cycle))
                 last_hand_phase = sample.phase
-            last_sample = sample
             built.hand.set_world_pose(position=np.asarray(sample.position))
             if bridge is not None:
                 bridge.update(sim_time, publish_camera=step % camera_period_steps == 0)

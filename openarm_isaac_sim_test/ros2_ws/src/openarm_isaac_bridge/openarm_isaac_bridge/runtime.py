@@ -113,7 +113,7 @@ class IsaacRosBridge:
         )
         self.control = TrajectoryController(robot, self.node, robot_config["controller_actions"])
         self.node.create_subscription(String, "/openarm/safety/state", self._safety_callback, 10)
-        self._executor = MultiThreadedExecutor(num_threads=3)
+        self._executor = MultiThreadedExecutor(num_threads=6)
         self._executor.add_node(self.node)
         self._spin_thread = threading.Thread(target=self._executor.spin, daemon=True)
         self._spin_thread.start()
@@ -149,6 +149,7 @@ class IsaacRosBridge:
         self._capture_state_screenshot(sim_time)
 
     def close(self) -> None:
+        self.control.stop()
         self._executor.shutdown(timeout_sec=1.0)
         self.node.destroy_node()
         self._spin_thread.join(timeout=1.0)

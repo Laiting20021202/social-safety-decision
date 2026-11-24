@@ -10,7 +10,7 @@ import numpy as np
 from .assets import RobotAsset, resolve_robot_asset
 from .camera_math import camera_aim_direction, camera_world_position, intrinsics_from_horizontal_fov
 from .config import PROJECT_ROOT, load_yaml
-from .scene_model import CubeSpec, deterministic_cube_layout
+from .scene_model import CubeSpec, deterministic_cube_layout, workstation_boxes
 
 
 @dataclass
@@ -26,14 +26,16 @@ class BuiltScene:
 class IsaacSceneBuilder:
     """Build the complete stage after ``SimulationApp`` has been initialized."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, demo_marker: bool = False) -> None:
         self.scene_config = load_yaml("config/scene.yaml")
         self.camera_config = load_yaml("config/camera.yaml")["camera"]
         self.robot_config = load_yaml("config/openarm.yaml")["robot"]
         self.hand_config = load_yaml("config/hand_scenarios.yaml")["defaults"]
+        self.demo_marker = demo_marker
 
     def build(self) -> BuiltScene:
         from isaacsim.core.api import World
+        from isaacsim.core.api.objects import FixedCuboid
 
         physics = self.scene_config["physics"]
         world = World(
@@ -41,10 +43,21 @@ class IsaacSceneBuilder:
             physics_dt=float(physics["dt"]),
             rendering_dt=float(physics["rendering_dt"]),
         )
-        world.scene.add_default_ground_plane(z_position=0.0)
+        # Author the floor locally so startup does not wait for NVIDIA's remote grid USD.
+        world.scene.add(
+            FixedCuboid(
+                prim_path="/World/Ground",
+                name="ground",
+                position=np.asarray([0.0, 0.0, -0.05]),
+                scale=np.asarray([10.0, 10.0, 0.10]),
+                size=1.0,
+                color=np.asarray([0.20, 0.22, 0.24]),
+            )
+        )
         self._configure_physics(world)
         self._add_table(world)
-        self._add_bins(world)
+        if self.scene_config["bins"].get("enabled", True):
+            self._add_bins(world)
         cube_specs = self._add_cubes(world)
         self._add_calibration_marker(world)
         hand = self._add_hand_obstacle()
@@ -115,36 +128,21 @@ class IsaacSceneBuilder:
         from isaacsim.core.api.objects import FixedCuboid
 
         table = self.scene_config["table"]
-        world.scene.add(
-            FixedCuboid(
-                prim_path="/World/Workstation/Table",
-                name="table",
-                position=np.asarray(table["center"], dtype=float),
-                scale=np.asarray(table["size"], dtype=float),
-                size=1.0,
-                color=np.asarray(table["color_rgb"], dtype=float),
+        paths = ("Table", "YellowEdge")
+        colors = (table["color_rgb"], table["yellow_edge"]["color_rgb"])
+        for box, path, color in zip(workstation_boxes(self.scene_config), paths, colors, strict=True):
+            orientation = np.array([math.cos(box.yaw / 2.0), 0.0, 0.0, math.sin(box.yaw / 2.0)])
+            world.scene.add(
+                FixedCuboid(
+                    prim_path=f"/World/Workstation/{path}",
+                    name=box.name,
+                    position=box.position,
+                    orientation=orientation,
+                    scale=box.size,
+                    size=1.0,
+                    color=np.asarray(color, dtype=float),
+                )
             )
-        )
-        edge = table["yellow_edge"]
-        table_center = np.asarray(table["center"], dtype=float)
-        table_size = np.asarray(table["size"], dtype=float)
-        edge_position = np.array(
-            [
-                table_center[0],
-                table_center[1] - table_size[1] / 2.0 + float(edge["width"]) / 2.0,
-                float(table["top_z"]) + float(edge["height"]) / 2.0,
-            ]
-        )
-        world.scene.add(
-            FixedCuboid(
-                prim_path="/World/Workstation/YellowEdge",
-                name="yellow_table_edge",
-                position=edge_position,
-                scale=np.array([table_size[0], edge["width"], edge["height"]], dtype=float),
-                size=1.0,
-                color=np.asarray(edge["color_rgb"], dtype=float),
-            )
-        )
 
     def _add_bins(self, world: Any) -> None:
         from isaacsim.core.api.objects import FixedCuboid
@@ -179,10 +177,26 @@ class IsaacSceneBuilder:
                 add_update_semantics(piece.prim, f"{color_name}_sorting_bin")
 
     def _add_cubes(self, world: Any) -> list[CubeSpec]:
-        from isaacsim.core.api.objects import DynamicCuboid
+        from isaacsim.core.api.objects import DynamicCuboid, VisualCuboid
         from isaacsim.core.utils.semantics import add_update_semantics
 
+        targets = self.scene_config.get("target_cubes", {})
+        if targets.get("enabled", False):
+            if targets.get("sensor_visible", False):
+                for spec in deterministic_cube_layout(self.scene_config):
+                    world.scene.add(
+                        VisualCuboid(
+                            prim_path=f"/World/Targets/{spec.name}",
+                            name=spec.name,
+                            position=np.asarray(spec.position, dtype=float),
+                            size=float(targets["size"]),
+                            color=np.asarray(targets["models"][spec.color]["color_rgb"], dtype=float),
+                        )
+                    )
+            return []
         cubes = self.scene_config["cubes"]
+        if not cubes.get("enabled", True):
+            return []
         size = float(cubes["size"])
         specs = deterministic_cube_layout(self.scene_config)
         for spec in specs:
@@ -282,7 +296,8 @@ class IsaacSceneBuilder:
             transform.Set(
                 Gf.Matrix4d().SetScale(Gf.Vec3d(*scale)).SetTranslateOnly(Gf.Vec3d(*offset))
             )
-            cube.CreateDisplayColorAttr([Gf.Vec3f(0.70, 0.40, 0.28)])
+            color = (0.78, 0.03, 0.78) if self.demo_marker else (0.70, 0.40, 0.28)
+            cube.CreateDisplayColorAttr([Gf.Vec3f(*color)])
             add_update_semantics(cube.GetPrim(), "placeholder_human_hand")
 
         proxy_parts = {
