@@ -1,5 +1,7 @@
 # Social Safety Decision — OpenArm／Isaac Sim 交接
 
+> 本頁的指令與路徑使用交付當時的工作區。現行工作區的啟動方式見 [Docker 與 ROS 2 文件](../DOCKER.md)。[改版前的工作樹](https://github.com/Laiting20021202/social-safety-decision/tree/02563df2da4494cb90703f203561d978eaed6d70)
+
 最後整理：**2026-09-30**。本週目標：將模擬環境完整切換到 Isaac Sim，讓假人把手伸到 OpenArm 前方，由既有 Safety Decision 觸發機械手臂迴避，並留下可重現的測試證據。
 
 **目前尚未完成 Isaac Sim 感知 → Safety Decision → OpenArm 迴避的端到端驗收。**
@@ -13,7 +15,7 @@ GitHub：[Laiting20021202/social-safety-decision](https://github.com/Laiting2002
 
 | 項目 | 狀態／證據 | 接續工作 |
 |---|---|---|
-| RGB-D、EdgeTAM／MediaPipe、人手點雲與追蹤 | 已有程式與單元測試；Gazebo 歷史整合見 [紀錄](../../openarm_isaac_sim_test/docs/HANDOFF_STATUS.md) | 在 Isaac 的同步 RGB-D、TF 下重驗 |
+| RGB-D、EdgeTAM／MediaPipe、人手點雲與追蹤 | 已有程式與單元測試；Gazebo 歷史整合見 [紀錄](../../src/openarm_sim/docs/HANDOFF_STATUS.md) | 在 Isaac 的同步 RGB-D、TF 下重驗 |
 | Safety Decision、MoveIt 動態迴避／回復 | 已有 `openarm_safety_bridge`、`openarm_dynamic_avoidance`、`openarm_sorting_task` | 接上 Isaac trajectory action，驗證取消、迴避、回復與逾時停止 |
 | Isaac 原生場景與 ROS bridge | 原始碼存在；歷史場景 smoke 有紀錄，本次未重跑 runtime | 重建資產、核對現行場景、相機與控制介面 |
 | Isaac LAN 三路 RGB／前相機估計點雲 | 9/17 曾量測約 4.95 Hz、每筆 12,000 點；9/30 已填入前相機對底盤外參；[歷史結果](../../results/isaac_lan_readiness_2026-09-17.json) | 補 aligned metric depth、校正 RGB 估計點雲尺度與手部障礙管線 |
@@ -202,7 +204,7 @@ bash scripts/run_dynamic_avoidance_test.sh
 bash scripts/stop_gazebo_demo.sh
 ```
 
-以上 Gazebo runtime 本次未重跑；前置與操作見 [模擬專案 README](../../openarm_isaac_sim_test/README.md)。
+以上 Gazebo runtime 本次未重跑；前置與操作見 [模擬專案 README](https://github.com/Laiting20021202/social-safety-decision/blob/02563df2da4494cb90703f203561d978eaed6d70/openarm_isaac_sim_test/README.md)。
 
 ## 本週工作順序與完成定義
 
@@ -231,8 +233,8 @@ bash scripts/stop_gazebo_demo.sh
 
 - [Isaac Sim 交接清單](../../docs/ISAAC_SIM_HANDOFF.md)：目前工作優先順序與驗收。
 - [分支分工與進度](../../docs/BRANCHES_AND_PROGRESS.md)：`main` 是本次交接快照；舊 layer 分支尚未同步本次變更。
-- [模擬專案 README](../../openarm_isaac_sim_test/README.md)：Gazebo 回歸操作、既有 Isaac launch 與控制說明。
-- [模擬歷史驗證](../../openarm_isaac_sim_test/docs/HANDOFF_STATUS.md)、[本次離線驗證](../../results/repo_handoff_2026-09-22.md)。
+- [模擬專案 README](https://github.com/Laiting20021202/social-safety-decision/blob/02563df2da4494cb90703f203561d978eaed6d70/openarm_isaac_sim_test/README.md)：Gazebo 回歸操作、既有 Isaac launch 與控制說明。
+- [模擬歷史驗證](../../src/openarm_sim/docs/HANDOFF_STATUS.md)、[本次離線驗證](../../results/repo_handoff_2026-09-22.md)。
 - [Viewer／Koch／模型技術手冊](../../docs/VIEWER_REFERENCE.md)：原 README 的完整技術內容與歷史效能資料。
 - [EdgeTAM 接口與限制](../../docs/edgetam_pointcloud_tracker.md)、[OpenArm GUI 座標契約](../../docs/openarm_gui.md)。
 

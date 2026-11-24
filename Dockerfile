@@ -15,32 +15,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/social-safety-decision
-COPY openarm_isaac_sim_test/dependencies.repos /tmp/openarm.repos
-RUN mkdir -p openarm_isaac_sim_test/ros2_ws/src && \
-    vcs import --shallow openarm_isaac_sim_test/ros2_ws/src < /tmp/openarm.repos
-COPY . .
+COPY openarm.repos ./
+COPY scripts/fetch_openarm_dependencies.sh scripts/
+RUN bash scripts/fetch_openarm_dependencies.sh
+COPY src/ src/
+COPY docker/ docker/
 RUN source /opt/ros/humble/setup.bash && \
     colcon build --merge-install --build-base /tmp/social-safety-build \
       --install-base /opt/social-safety-ros \
-      --base-paths . openarm_isaac_sim_test/ros2_ws/src \
-      --packages-select realtime_3d_safety_decision openarm_description \
-        openarm_bimanual_moveit_config hand_obstacle_controller openarm_control_bringup \
-        openarm_dynamic_avoidance openarm_isaac_bridge openarm_perception_adapter \
-        openarm_safety_bridge openarm_sim_bringup openarm_sim_evaluator openarm_sorting_task \
+      --base-paths src \
       --cmake-args -DBUILD_TESTING=OFF && \
     source /opt/social-safety-ros/setup.bash && \
-    description_dir="$PWD/openarm_isaac_sim_test/ros2_ws/src/external/openarm_description" && \
-    mkdir -p "$description_dir/generated" third_party && \
+    description_dir="$PWD/.openarm-vendor/openarm_description" && \
+    mkdir -p "$description_dir/generated" && \
     xacro "$description_dir/assets/robot/openarm_v1.0/urdf/openarm_v10.urdf.xacro" \
       bimanual:=true no_prefix:=false ros2_control:=false \
       -o "$description_dir/generated/openarm_v10_bimanual.urdf" && \
-    ln -s ../openarm_isaac_sim_test/ros2_ws/src/external/openarm_description \
-      third_party/openarm_description && \
     rm -rf /tmp/social-safety-build /opt/social-safety-decision/log
 
-ENV OPENARM_SIM_ROOT=/opt/social-safety-decision/openarm_isaac_sim_test \
-    PYTHONPATH=/opt/social-safety-decision/openarm_isaac_sim_test \
-    PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1
 ENTRYPOINT ["/bin/bash", "/opt/social-safety-decision/docker/entrypoint.sh"]
 CMD ["ros2", "launch", "openarm_control_bringup", "control.launch.py"]
 
@@ -53,12 +46,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rmw-fastrtps-cpp ros-humble-rosgraph-msgs ros-humble-tf2-ros-py \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /opt/social-safety-decision/openarm_isaac_sim_test
-COPY openarm_isaac_sim_test/ .
+WORKDIR /opt/social-safety-decision/src/openarm_sim
+COPY src/openarm_sim/ .
+COPY src/openarm_isaac_bridge/ ../openarm_isaac_bridge/
 COPY docker/entrypoint.sh /opt/social-safety-decision/docker/entrypoint.sh
 COPY docker/fastdds.xml /opt/social-safety-decision/docker/fastdds.xml
-COPY --from=control /opt/social-safety-decision/openarm_isaac_sim_test/ros2_ws/src/external/openarm_description /opt/openarm-description
-ENV OPENARM_SIM_ROOT=/opt/social-safety-decision/openarm_isaac_sim_test \
+COPY --from=control /opt/social-safety-decision/.openarm-vendor/openarm_description /opt/openarm-description
+ENV OPENARM_SIM_ROOT=/opt/social-safety-decision/src/openarm_sim \
     OPENARM_DESCRIPTION_ROOT=/opt/openarm-description \
     PYTHONUNBUFFERED=1
 ENTRYPOINT ["/bin/bash", "/opt/social-safety-decision/docker/entrypoint.sh"]

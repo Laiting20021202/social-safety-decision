@@ -13,7 +13,11 @@
 **/outputs
 **/results
 **/sessions
-**/ros2_ws/src/external
+.openarm-vendor
+src/openarm_description
+src/openarm_bimanual_moveit_config
+src/openarm_sim/gazebo/generated
+src/openarm_sim/gazebo/worlds
 **/openarm_cache
 **/libhand
 **/*.bag

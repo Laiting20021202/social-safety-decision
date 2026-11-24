@@ -3,9 +3,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PERCEPTION_DIR="$ROOT_DIR/src/realtime_3d_safety_decision"
 PYTHON="${REPO_CHECK_PYTHON:-${ROOT_DIR}/.venv/bin/python}"
+if [[ -z "${REPO_CHECK_PYTHON:-}" && ! -x "$PYTHON" ]]; then
+  PYTHON="$PERCEPTION_DIR/.venv/bin/python"
+fi
 if [[ ! -x "$PYTHON" ]]; then
-  echo "Missing Python: $PYTHON. Run scripts/setup.sh and install .[test] first." >&2
+  echo "Missing Python: $PYTHON. See docs/DOCKER.md for offline test setup." >&2
   exit 1
 fi
 
@@ -15,12 +19,11 @@ while IFS= read -r -d '' script; do
   bash -n "$script"
 done < <(git ls-files --cached --others --exclude-standard -z -- '*.sh')
 
-"$PYTHON" -m compileall -q app.py realtime_safety scripts tests \
-  openarm_isaac_sim_test/openarm_sim openarm_isaac_sim_test/scripts \
-  openarm_isaac_sim_test/launch
-"$PYTHON" -m pytest -q tests
-(
-  cd openarm_isaac_sim_test
-  "$PYTHON" -m pytest -q
-)
+"$PYTHON" -m compileall -q src scripts docker
+for package_dir in "$PERCEPTION_DIR" "$ROOT_DIR/src/openarm_sim"; do
+  (
+    cd "$package_dir"
+    "$PYTHON" -m pytest -q
+  )
+done
 echo "Offline checks passed. Isaac runtime and arm avoidance still require separate validation."

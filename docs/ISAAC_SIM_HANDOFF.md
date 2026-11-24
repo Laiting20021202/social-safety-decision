@@ -1,5 +1,7 @@
 # Isaac Sim／OpenArm 接續工作清單
 
+> 這是 2026-09-22 的交接快照。現行 ROS 2 目錄及 Docker 啟動方式見[首頁](../README.md)。
+
 更新：2026-09-22。目的：接手者使用 David 的電腦，完成「Isaac 假人伸手 → RGB-D 感知 → Safety Decision → OpenArm 迴避」演示。**以下是待完成的整合與驗收計畫，不是已通過的 Isaac 操作流程。** 已通過範圍見 [本次驗證](../results/repo_handoff_2026-09-22.md)。
 
 ## 先分清楚兩個 Isaac 入口

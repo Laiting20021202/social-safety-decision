@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1140" height="694" viewBox="0 0 1140 694" role="img" aria-labelledby="title desc">
+  <title id="title">OpenArm ROS 2 control and Sim-to-Real architecture</title>
+  <desc id="desc">Within a Docker Compose host, the Isaac container connects to the ROS 2 control container through camera, state and action interfaces. A future physical driver can supply the same interfaces. Perception feeds safety and avoidance. The target node works with MoveIt and avoidance before commanding either backend.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+      <path d="M0 0L8 4L0 8Z" fill="#405b70"/>
+    </marker>
+    <style>
+      text { font-family: Arial, sans-serif; fill: #182d3d; }
+      .title { font-size: 26px; font-weight: bold; }
+      .section { font-size: 20px; font-weight: bold; }
+      .package { font-size: 16px; font-weight: bold; }
+      .detail { font-size: 14px; fill: #314d60; }
+      .topic { font: 13px monospace; fill: #254458; }
+      .label { font-size: 13px; fill: #314d60; }
+      .flow { fill: none; stroke: #405b70; stroke-width: 1.7; marker-end: url(#arrow); }
+      .both { marker-start: url(#arrow); }
+      .dashed { stroke-dasharray: 6 5; }
+      .node { fill: #eaf3fd; stroke: #7398c2; stroke-width: 1.2; }
+      .center { text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect width="1140" height="694" fill="#ffffff"/>
+  <rect x="18" y="18" width="1104" height="658" rx="22" fill="#edf5ed" stroke="#8da795" stroke-width="1.4"/>
+  <text x="54" y="60" class="title">Linux host · Docker Compose</text>
+
+  <rect x="54" y="84" width="500" height="144" rx="15" fill="#f9f5ff" stroke="#a28ab6" stroke-width="1.3"/>
+  <text x="78" y="117" class="section">Isaac container · Isaac Sim 4.5</text>
+  <rect x="77" y="139" width="207" height="65" rx="9" fill="#f0e7f7" stroke="#a28ab6"/>
+  <rect x="321" y="139" width="209" height="65" rx="9" fill="#f0e7f7" stroke="#a28ab6"/>
+  <text x="181" y="166" class="package center">openarm_sim</text>
+  <text x="181" y="187" class="detail center">Scene, sensors and PhysX</text>
+  <text x="425" y="166" class="package center">openarm_isaac_bridge</text>
+  <text x="425" y="187" class="detail center">ROS 2 I/O and actions</text>
+  <path d="M284 171H321" class="flow both"/>
+
+  <rect x="610" y="84" width="475" height="144" rx="15" fill="#f8fbf7" stroke="#829b89" stroke-width="1.3" stroke-dasharray="6 5"/>
+  <text x="634" y="117" class="section">Physical backend · Sim-to-Real</text>
+  <rect x="634" y="139" width="195" height="65" rx="9" fill="#e9f3e8" stroke="#829b89"/>
+  <rect x="848" y="139" width="212" height="65" rx="9" fill="#e9f3e8" stroke="#829b89"/>
+  <text x="732" y="166" class="package center">Camera and perception</text>
+  <text x="732" y="187" class="detail center">Calibrated TF and cloud</text>
+  <text x="954" y="166" class="package center">OpenArm hardware driver</text>
+  <text x="954" y="187" class="detail center">Joint feedback and controllers</text>
+  <path d="M425 204V262" class="flow both"/>
+  <path d="M732 204V262" class="flow dashed"/>
+  <path d="M954 204V262" class="flow both dashed"/>
+
+  <rect x="54" y="262" width="1031" height="73" rx="11" fill="#fff5dc" stroke="#b29a58" stroke-width="1.3"/>
+  <text x="222" y="290" class="package center">Camera / obstacle input</text>
+  <text x="222" y="311" class="topic center">/rgbd/* or metric PointCloud2</text>
+  <text x="557" y="290" class="package center">Shared ROS 2 state interface</text>
+  <text x="557" y="311" class="topic center">/joint_states · /tf · /clock (Isaac)</text>
+  <text x="902" y="290" class="package center">Controller actions</text>
+  <text x="902" y="311" class="topic center">FollowJointTrajectory · GripperCommand</text>
+
+  <rect x="54" y="370" width="1031" height="276" rx="16" fill="#f5f9fd" stroke="#7495b5" stroke-width="1.3"/>
+  <text x="78" y="402" class="section">Control container · ROS 2 Humble</text>
+  <text x="1058" y="398" class="topic" text-anchor="end">openarm_control_bringup</text>
+
+  <rect x="78" y="435" width="279" height="63" rx="9" class="node"/>
+  <rect x="430" y="435" width="279" height="63" rx="9" class="node"/>
+  <rect x="782" y="435" width="279" height="63" rx="9" class="node"/>
+  <text x="218" y="460" class="package center">openarm_perception_adapter</text>
+  <text x="218" y="481" class="detail center">RGB-D back-projection or cloud relay</text>
+  <text x="570" y="460" class="package center">openarm_safety_bridge</text>
+  <text x="570" y="481" class="detail center">Clearance, freshness and risk state</text>
+  <text x="922" y="460" class="package center">openarm_dynamic_avoidance</text>
+  <text x="922" y="481" class="detail center">Trajectory gating, scaling and replan</text>
+
+  <rect x="78" y="562" width="279" height="63" rx="9" class="node"/>
+  <rect x="430" y="562" width="279" height="63" rx="9" class="node"/>
+  <text x="218" y="587" class="package center">MoveIt 2 · robot_state_publisher</text>
+  <text x="218" y="608" class="detail center">Robot model and collision planning</text>
+  <text x="570" y="587" class="package center">openarm_sorting_task / pose_goal</text>
+  <text x="570" y="608" class="detail center">Goal, cancellation and execution</text>
+
+  <path d="M222 335V351H418V410H218V435" class="flow"/>
+  <path d="M557 335V435" class="flow"/>
+  <path d="M357 467H430" class="flow"/>
+  <text x="393" y="427" class="topic center">/perception/obstacles</text>
+  <path d="M709 467H782" class="flow"/>
+  <text x="746" y="427" class="label center">Safety state / scaling</text>
+  <path d="M166 498V513H962V498" class="flow"/>
+  <text x="392" y="531" class="label center">Measured obstacle cloud</text>
+  <path d="M570 498V540H265V562" class="flow"/>
+  <text x="433" y="555" class="topic center">/planning_scene</text>
+  <path d="M357 593H430" class="flow both"/>
+  <text x="393" y="587" class="label center">Plan</text>
+  <path d="M922 498V593H709" class="flow both"/>
+  <text x="814" y="584" class="label center">Nominal trajectory</text>
+  <text x="814" y="612" class="label center">Gated trajectory / replan</text>
+  <path d="M570 625V657H1100V301H1085" class="flow"/>
+</svg>

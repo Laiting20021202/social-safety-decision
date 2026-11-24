@@ -17,6 +17,10 @@ third_party/EdgeTAM/
 third_party/MASt3R-SLAM/
 third_party/openarm_description/
 .venv-mast3r-slam/
+/.openarm-vendor/
+/src/openarm_description
+/src/openarm_bimanual_moveit_config
+/src/realtime_3d_safety_decision/third_party/
 *.pt
 *.pth
 *.engine

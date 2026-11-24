@@ -2,6 +2,8 @@
 
 Last updated: 2026-09-22
 
+> This page records the September handoff. See the [workspace README](../README.md) for the current layout and launch commands.
+
 ## Current handoff: Isaac Sim migration
 
 The current `main` handoff adds the September Isaac LAN viewer work and a

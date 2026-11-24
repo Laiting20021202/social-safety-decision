@@ -2,7 +2,7 @@
 
 ## 建置與驗收
 
-在 Linux x86-64 的 NVIDIA GPU 主機安裝 Docker Compose 與 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)。映像使用 Isaac Sim 4.5.0 與 ROS 2 Humble 的固定 digest。OpenArm 模型和 MoveIt 設定依 [dependencies.repos](../openarm_isaac_sim_test/dependencies.repos) 的 commit 取得。初次建置會從公開登錄檔與套件庫下載相依項目。
+在 Linux x86-64 的 NVIDIA GPU 主機安裝 Docker Compose 與 NVIDIA Container Toolkit。映像使用 Isaac Sim 4.5.0 與 ROS 2 Humble 的固定 digest。控制映像依 `openarm.repos` 取得 OpenArm 模型和 MoveIt 設定，以 `colcon build --base-paths src` 建置套件。初次建置從公開登錄檔與套件庫下載相依項目。[NVIDIA Container Toolkit 安裝說明](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) · [上游套件版本](../openarm.repos)
 
 ```bash
 bash docker/build.sh
@@ -56,3 +56,36 @@ OPENARM_BACKEND=hardware OPENARM_PERCEPTION=cloud \
 ## 歷史執行入口
 
 Gazebo Classic、Koch、Isaac LAN viewer、Tidybot 和外部模型設定見 [歷史操作手冊](history/2026-10-15-host-workflows.md) 與 [程式索引](CODE_MAP.md)。
+
+## 主機端開發
+
+從 repo 根目錄執行。主機需有 ROS 2 Humble、`colcon`、`vcs`，以及對應的 ROS 套件依賴。上游套件下載至 `.openarm-vendor/`，其中參與建置的兩個套件連結至 `src/`。
+
+```bash
+source /opt/ros/humble/setup.bash
+bash scripts/fetch_openarm_dependencies.sh
+colcon list --base-paths src
+colcon build --base-paths src
+source install/setup.bash
+```
+
+如果 checkout 路徑含中文，ROS 2 Humble 的訊息產生器需要使用 ASCII 的建置輸出路徑。從同一個 repo 根目錄執行以下指令即可保留原始碼位置。
+
+```bash
+ros_build_dir=$(mktemp -d /tmp/openarm-ros2.XXXXXX)
+colcon --log-base "$ros_build_dir/log" build --base-paths src \
+  --build-base "$ros_build_dir/build" --install-base "$ros_build_dir/install"
+source "$ros_build_dir/install/setup.bash"
+```
+
+離線回歸會檢查感知、場景與 ROS 介面。先生成測試所需的上游 URDF，再將 `REPO_CHECK_PYTHON` 指向已安裝感知套件測試依賴的 Python。
+
+```bash
+mkdir -p src/openarm_description/generated
+xacro src/openarm_description/assets/robot/openarm_v1.0/urdf/openarm_v10.urdf.xacro \
+  bimanual:=true no_prefix:=false ros2_control:=false \
+  -o src/openarm_description/generated/openarm_v10_bimanual.urdf
+python3 -m venv .venv
+.venv/bin/python -m pip install -e 'src/realtime_3d_safety_decision[test]'
+bash scripts/check_repo.sh
+```

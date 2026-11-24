@@ -1,5 +1,17 @@
 # 2026-11-24 Docker／Isaac Sim 驗收
 
+## ROS 2 `src/` 工作區複驗
+
+| 項目 | 實測結果 |
+|---|---|
+| 建置 | Docker 控制映像與主機 `colcon build --base-paths src` 均建置 13 個套件，其中 11 個為 repo 套件、2 個為固定版本的 OpenArm 上游套件。主機測試在 ASCII 路徑輸出建置結果。Isaac 映像亦建置成功。 |
+| Isaac 與 MoveIt | 無障礙場景收到同步 RGB-D、光學 TF、時鐘及關節回饋。MoveIt 讀到工作台碰撞物，`home` 經 `EXECUTING` 到 `HOME_REACHED`。 |
+| 障礙與 action | 模擬手部發布後收到非空障礙點雲。雙臂動作同時提交，左臂成功，右臂獨立取消。雙側夾爪 action 可連線。 |
+| 硬體觀測設定 | 隔離網路中以合成量測雲達到 `SAFE`，重複時間戳觸發 `EMERGENCY_STOP`。此模式測試未連接實體設備。 |
+| 離線回歸 | 感知套件 342 passed、2 skipped，模擬套件 120 passed。跳過神經模型與選用的 Tidybot ROS 測試。Gazebo 生成模型的自體過濾測試通過。 |
+
+## 首次 Docker 整合
+
 | 項目 | 實測結果 |
 |---|---|
 | 建置 | ROS 2 Humble 控制映像建置 12 個 ROS 套件，包含兩個固定 revision 的 OpenArm 上游套件。Isaac Sim 4.5.0 映像由同一份 checkout 建立。 |

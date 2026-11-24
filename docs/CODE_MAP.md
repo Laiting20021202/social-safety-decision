@@ -1,8 +1,10 @@
 # 程式索引
 
-以 Docker 安裝後的 ROS 2 入口為起點，先查[系統架構](ARCHITECTURE.md)和[執行方式](DOCKER.md)。下表使用專案內的模組名稱，路徑相對於工作樹。
+以 Docker 安裝後的 ROS 2 入口為起點。[系統架構](ARCHITECTURE.md) · [執行方式](DOCKER.md)
 
 ## 通用感知與主機應用
+
+以下路徑相對於 [`src/realtime_3d_safety_decision/`](../src/realtime_3d_safety_decision/)。`pipeline/`、`edgetam_tracker/`、`ros2_bridge/` 位於 `realtime_safety/` 下。
 
 | 路徑 | 責任與主要入口 |
 |---|---|
@@ -29,7 +31,7 @@
 
 ## 模擬、ROS 2 規劃與控制
 
-下列套件位於 `openarm_isaac_sim_test/ros2_ws/src/`。包內的 `setup.py` 或 `CMakeLists.txt` 列出可執行入口，`package.xml` 描述相依關係。
+所有套件直接位於 [`src/`](../src/)。包內的 `setup.py` 或 `CMakeLists.txt` 列出可執行入口，`package.xml` 描述相依關係。下表的 Python 檔在各套件的同名模組內，launch 檔在套件的 `launch/` 目錄。
 
 | 模組 | 程式責任 |
 |---|---|
@@ -52,23 +54,19 @@
 | `openarm_sim/camera_math.py` | 內參、光學座標、深度回推與相機投影。 |
 | `openarm_sim/scenario.py`、`hand_runtime.py` | 可重現的障礙運動腳本、手動命令與狀態。 |
 | `openarm_sim/state_machine.py`、`metrics.py` | 純 Python 狀態／事件模型及試驗資料儲存。 |
-| `openarm_isaac_sim_test/scripts/run_sim.py` | 建立 SimulationApp、場景和橋接，推進物理步，連接場景與 I/O。 |
+| `src/openarm_sim/scripts/run_sim.py` | 建立 SimulationApp、場景和橋接，推進物理步，連接場景與 I/O。 |
 
 ## 部署、測試與歷史入口
 
 | 路徑 | 目的 |
 |---|---|
 | `Dockerfile`、`compose.yaml`、`docker/` | 容器與 DDS 設定、建置、啟動和 Isaac ROS 合約驗收。 |
-| `launch/edgetam_pointcloud_tracker.launch.py`、`scripts/edgetam_pointcloud_tracker_node` | 啟動現有 ROS 2 追蹤節點，選擇 live 或 bag 資料。 |
-| `scripts/setup*.sh`、`scripts/download*.sh` | 補宿主機套件、官方模型和 OpenArm 資產。 |
-| `scripts/run_{fast,agx,viewer,isaac_gui,koch_stream,rqt_camera,rviz_pointcloud,tidybot_retreat}.sh` | 過往主機與平台入口。LAN 環境設定由 `*_ros_env.sh` 或 `ros2_lan_env.sh` 提供。 |
-| `scripts/configure_koch_camera.py`、`install_koch_wifi_stability.sh` | Koch 相機與網路現場設定。 |
-| `scripts/benchmark.py`、`evaluate_rgb_metric_feasibility.py`、`measure_pointcloud_topic.py`、`tools/` | 量測推論、比例尺、ROS topic 與手部追蹤成效。 |
-| `openarm_isaac_sim_test/launch/`、`scripts/start_*demo.sh` 和 `stop_*demo.sh` | 舊的 Isaac/Gazebo 啟動、關閉與整合測試。新容器啟動走 `openarm_control_bringup`。 |
-| `openarm_isaac_sim_test/scripts/create_*`、`prepare_*`、`fetch_libhand_asset.py`、`export_stage.py` | 生成模擬資產、取得舊 Gazebo 手部網格與匯出 USD。 |
-| `openarm_isaac_sim_test/scripts/validate_*`、`capture_gazebo_layout.py`、`evaluate_gazebo_contacts.py`、`record_gazebo_trial.py`、`spawn_recording_camera.py` 和 `run_*validation* / run_*test.sh` | 場景驗收、接觸與控制紀錄、測試執行和錄影。各程式的 `--help` 及[歷史操作手冊](history/2026-10-15-host-workflows.md)列出適用後端。 |
-| `tests/`、`openarm_isaac_sim_test/tests/`、`scripts/check_repo.sh` | 根專案感知／ROS／GUI 回歸、模擬與控制測試及離線檢查。 |
-| `config/`、`configs/`、`openarm_isaac_sim_test/config/` | ROS 感知設定、主機應用設定和場景／機器人配置。 |
-| `results/`、`benchmarks/` | 前期評估摘要與跑分。相關版本見[歷史交付索引](DELIVERABLES.md)。 |
-
-`pipeline/`、`edgetam_tracker/`、`ros2_bridge/` 是 `realtime_safety/` 的子路徑。`openarm_sim/` 與模擬的驗收腳本位於 `openarm_isaac_sim_test/`。
+| `openarm.repos`、`scripts/fetch_openarm_dependencies.sh` | 固定上游模型與 MoveIt 設定版本，接入 `src/`。 |
+| [`src/realtime_3d_safety_decision/launch/`](../src/realtime_3d_safety_decision/launch/) | 啟動 EdgeTAM ROS 2 追蹤節點，選擇即時來源或 rosbag。 |
+| [`src/realtime_3d_safety_decision/scripts/`](../src/realtime_3d_safety_decision/scripts/) | 安裝歷史模型與主機套件，啟動 Koch、Tidybot、RViz 及 Viser，量測 ROS topic 與深度比例尺。 |
+| [`src/realtime_3d_safety_decision/tools/`](../src/realtime_3d_safety_decision/tools/) | EdgeTAM、點雲 tracker 與 ROS 整合評估。 |
+| [`src/openarm_sim_bringup/launch/`](../src/openarm_sim_bringup/launch/) | Isaac、Gazebo、MoveIt 與 RViz 的模擬入口。 |
+| [`src/openarm_sim/scripts/`](../src/openarm_sim/scripts/) | `create_*`、`prepare_*` 生成資產，`start_*demo.sh` 啟動歷史主機 demo，`validate_*`、`run_*test.sh` 與 `record_*` 執行驗收、測試及錄影。 |
+| `src/realtime_3d_safety_decision/tests/`、`src/openarm_sim/tests/`、`scripts/check_repo.sh` | 感知／ROS／GUI、模擬與控制回歸及離線檢查。 |
+| `src/realtime_3d_safety_decision/config/`、`configs/`、`src/openarm_sim/config/` | ROS 感知設定、主機應用設定和場景／機器人配置。 |
+| [`results/`](../results/)、[`src/realtime_3d_safety_decision/benchmarks/`](../src/realtime_3d_safety_decision/benchmarks/) | 前期評估摘要與跑分。 [歷史交付索引](DELIVERABLES.md) |

@@ -45,10 +45,10 @@
 
 ## 1. 開啟 GUI 與預覽節點
 
-先依 [README](../README.md) 啟動 GUI、保持 Isaac Play。另一個終端：
+先依歷史主機操作手冊啟動 GUI、保持 Isaac Play。在另一個終端從 repo 根目錄進入感知套件。[歷史主機操作手冊](history/2026-10-15-host-workflows.md)
 
 ```bash
-cd /home/david/Desktop/laiting/itri/3d_safety_decision/realtime_3d_safety_decision
+cd src/realtime_3d_safety_decision
 bash scripts/run_tidybot_retreat.sh
 ```
 
@@ -59,7 +59,7 @@ dry-run 會讀取點雲與關節、計算擬發送速度，僅在
 狀態監看（再開一個終端）：
 
 ```bash
-cd /home/david/Desktop/laiting/itri/3d_safety_decision/realtime_3d_safety_decision
+cd src/realtime_3d_safety_decision
 source scripts/isaac_ros_env.sh
 ros2 topic echo /realtime_safety/tidybot_retreat/status std_msgs/msg/String --no-daemon
 ```
@@ -70,7 +70,7 @@ ros2 topic echo /realtime_safety/tidybot_retreat/status std_msgs/msg/String --no
 
 ## 2. 核對設定後才啟用速度輸出
 
-設定檔：[configs/tidybot_retreat.yaml](../configs/tidybot_retreat.yaml)。
+設定檔位於感知套件的 `configs/`。[tidybot_retreat.yaml](../src/realtime_3d_safety_decision/configs/tidybot_retreat.yaml)
 
 1. `cloud_to_base` 已依現場 USD 外參填妥；矩陣定義為
    `p_base = R * (scale * p_cloud) + translation_m`。仍須用已知距離或 Isaac metric depth
