@@ -1,0 +1,7 @@
+{
+  "name": "LibHand 0.9 Human Hand Model",
+  "source": "https://libhand.org/files/libhand-0.9.tar.gz",
+  "sha256": "dad21d2cf170652368bacd584422fe5b4d52f349c6f411d2b546904bfd25d671",
+  "license": "CC-BY-3.0",
+  "conversion": "OGRE skinned mesh -> spread-hand Wavefront OBJ"
+}

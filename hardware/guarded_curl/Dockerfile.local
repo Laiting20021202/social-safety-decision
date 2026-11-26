@@ -1,0 +1,14 @@
+FROM laiting-openarm-viewer:humble
+SHELL ["/bin/bash","-o","pipefail","-c"]
+RUN required=(ffmpeg cmake g++ python3-pip python3-pil python3-scipy ros-humble-rviz2 ros-humble-xacro \
+      ros-humble-controller-manager ros-humble-joint-trajectory-controller ros-humble-joint-state-broadcaster \
+      ros-humble-moveit-ros-perception ros-humble-moveit-ros-move-group ros-humble-moveit-planners-ompl ros-humble-moveit-kinematics) \
+    && missing=() && for pkg in "${required[@]}"; do \
+      dpkg-query -W -f='${db:Status-Status}' "$pkg" 2>/dev/null | grep -qx installed || missing+=("$pkg"); done \
+    && if ((${#missing[@]})); then apt-get update && apt-get install -y --no-install-recommends "${missing[@]}" && rm -rf /var/lib/apt/lists/*; fi
+RUN python3 -m pip install --no-cache-dir 'mediapipe==0.10.21' 'opencv-contrib-python==4.10.0.84' 'numpy<2' 'jax==0.4.35' 'jaxlib==0.4.35'
+COPY semantic/ /opt/laiting/lib/realtime_safety/edgetam_tracker/
+COPY moveit/ /opt/laiting/moveit/
+COPY app/ /opt/laiting/app/
+ENV PYTHONPATH=/opt/laiting/lib OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=2
+CMD ["ros2", "launch", "/opt/laiting/app/station.launch.py"]

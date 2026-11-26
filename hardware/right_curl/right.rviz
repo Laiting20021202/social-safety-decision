@@ -1,0 +1,40 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Global Options:
+    Fixed Frame: world
+    Background Color: 43; 47; 53
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Ground (10 cm)
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 20
+      Color: 110; 118; 128
+    - Class: rviz_default_plugins/RobotModel
+      Name: OpenArm right arm
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+        Depth: 1
+      Visual Enabled: true
+      Collision Enabled: false
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 1.45
+      Focal Point: {X: 0.03, Y: -0.09, Z: 0.42}
+      Pitch: 0.23
+      Yaw: 5.33
+Window Geometry:
+  Width: 1120
+  Height: 800

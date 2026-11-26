@@ -1,0 +1,19 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 50
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+    right_joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+right_joint_trajectory_controller:
+  ros__parameters:
+    joints: [openarm_right_joint4]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+    state_publish_rate: 30.0
+    action_monitor_rate: 20.0
+    open_loop_control: false
+    constraints:
+      stopped_velocity_tolerance: 0.08
+      goal_time: 2.0
+      openarm_right_joint4: {trajectory: 0.065, goal: 0.035}

@@ -1,0 +1,9 @@
+newmtl skin
+Kd 0.95 0.68 0.56
+Ka 0.2 0.12 0.1
+Ks 0.08 0.08 0.08
+map_Kd hand_texture.png
+
+newmtl blackness
+Kd 0.03 0.02 0.02
+Ka 0.01 0.01 0.01

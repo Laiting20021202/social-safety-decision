@@ -1,0 +1,44 @@
+--- a/realsense2_camera/src/ros_sensor.cpp
++++ b/realsense2_camera/src/ros_sensor.cpp
+@@ -118,10 +118,9 @@
+     std::string module_name = create_graph_resource_name(rs2_to_ros(get_info(RS2_CAMERA_INFO_NAME)));
+     std::string param_name = module_name + "." + create_graph_resource_name(rs2_option_to_string(RS2_OPTION_ENABLE_AUTO_EXPOSURE));
+ 
+-    bool user_set_enable_ae_value = _params.getParameters()->getParam<bool>(param_name);
+     bool is_hdr_enabled = static_cast<bool>(get_option(RS2_OPTION_HDR_ENABLED));
+ 
+-    if (is_hdr_enabled && user_set_enable_ae_value)
++    if (is_hdr_enabled && _params.getParameters()->getParam<bool>(param_name))
+     {
+         bool is_ae_enabled = static_cast<bool>(get_option(RS2_OPTION_ENABLE_AUTO_EXPOSURE));
+ 
+--- a/realsense2_camera/src/sensor_params.cpp
++++ b/realsense2_camera/src/sensor_params.cpp
+@@ -17,5 +17,7 @@
+ #include <iomanip>
++#include <chrono>
++#include <thread>
+ 
+ namespace realsense2_camera
+ {
+ bool is_checkbox(rs2::options sensor, rs2_option option)
+@@ -179,7 +181,18 @@
+     try
+     {
+         option_range = sensor.get_option_range(option);
+-        float current_val = sensor.get_option(option);
++        float current_val;
++        try
++        {
++            current_val = sensor.get_option(option);
++        }
++        catch (const rs2::error&)
++        {
++            if (option != RS2_OPTION_ENABLE_AUTO_EXPOSURE)
++                throw;
++            std::this_thread::sleep_for(std::chrono::milliseconds(150));
++            current_val = sensor.get_option(option);
++        }
+         if(std::is_same<T, double>::value)
+         {
+             option_value = float_to_double(current_val, option_range);

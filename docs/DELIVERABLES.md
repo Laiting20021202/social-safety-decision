@@ -9,5 +9,6 @@
 | 2026-09-22 Isaac LAN 交付 | [交接紀錄](../results/repo_handoff_2026-09-22.md)、[遷移清單](ISAAC_SIM_HANDOFF.md)、[影像修復](../results/isaac_image_receive_2026-09-23.md)。 |
 | 2026-10-15 主機交付 | [已發佈的 commit](https://github.com/Laiting20021202/social-safety-decision/commit/783b5d986487cd66b3e6f333875c631bbe0f9b64)、[主機執行手冊](history/2026-10-15-host-workflows.md)、[Tidybot 退避結果](../results/tidybot_retreat_2026-09-30.md)。 |
 | Docker／ROS 2 重整 | [容器與系統圖](ARCHITECTURE.md)、[Sim-to-Real 接入](DOCKER.md)、[程式索引](CODE_MAP.md)、[Docker 驗收](../results/docker_isaac_2026-11-24.md)。 |
+| 2026-11-26 胸口相機避碰 | [Isaac 影片、實驗數據與重算](../results/isaac_chest_curl_2026-11-26/README.md)、[三機配置](figures/chest-curl-architecture.svg)、[實機接入](../hardware/right_curl/README.md)。 |
 
 [歷史分支與進度](BRANCHES_AND_PROGRESS.md) 記錄當時的累積分支策略。依各筆驗收的模擬器、資料來源與量測條件解讀結果。

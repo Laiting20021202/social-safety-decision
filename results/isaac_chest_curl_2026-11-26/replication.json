@@ -1,0 +1,41 @@
+{
+  "passed": true,
+  "checks": {
+    "single_chest_camera": true,
+    "semantic_hold_before_full_reach": true,
+    "held_through_hand_presence": true,
+    "replanned_from_encoders_after_withdrawal": true,
+    "completed_two_measured_cycles": true,
+    "reached_configured_high_pose": true,
+    "returned_to_start": true,
+    "all_physics_steps_recorded": true,
+    "all_mesh_separations_above_15_mm": true,
+    "zero_physx_contact_reports": true
+  },
+  "cycles": 2,
+  "measured_steps": 19371,
+  "physics_step_s": 0.008333333767950535,
+  "max_physics_step_s": 0.008333333767950535,
+  "mesh_contact_steps": 0,
+  "physx_hand_robot_contacts": 0,
+  "minimum_mesh_clearance_m": 0.05578320274207241,
+  "link_at_minimum": "openarm_right_right_finger",
+  "phase_at_minimum": "present",
+  "detected_hand_source_frames": 63,
+  "hold_before_full_reach_s": 0.17184970800000002,
+  "hand_present_duration_s": 3.1830206760000004,
+  "elbow_travel_while_hand_present_deg": 0.2781406427728727,
+  "requested_elbow_travel_deg": 36.0,
+  "elbow_start_deg": 1.7188733853924696,
+  "elbow_peak_deg": 36.9439519370466,
+  "elbow_actual_travel_deg": 35.22507855165413,
+  "tcp_start_height_m": 0.1791212995513784,
+  "tcp_peak_height_m": 0.36557787629059707,
+  "tcp_lift_m": 0.18645657673921867,
+  "encoders_at_leg_ends_rad": [
+    0.6351441740989685,
+    0.04945250600576401,
+    0.6379592418670654,
+    0.05090288072824478
+  ]
+}

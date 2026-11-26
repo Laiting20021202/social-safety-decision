@@ -1,0 +1,44 @@
+{
+  "elapsed_s": 10.01,
+  "robot_description": true,
+  "joint_count": 16,
+  "topics": {
+    "joint_states": {
+      "distinct_frames": 501,
+      "rate_hz": 50.0
+    },
+    "d415_matched_rgb_depth_info": {
+      "distinct_frames": 163,
+      "rate_hz": 16.32
+    },
+    "mast3r": {
+      "distinct_frames": 28,
+      "rate_hz": 2.86
+    },
+    "scene": {
+      "distinct_frames": 28,
+      "rate_hz": 2.86
+    }
+  },
+  "guard_samples": {
+    "clear": 288
+  },
+  "latest_guard": {
+    "permit": true,
+    "reason": "clear",
+    "stamp_ns": 1795675785836807502,
+    "hands": 0,
+    "registered": true,
+    "cloud_stamp_ns": 1795675785225501391
+  },
+  "camera_namespaces": [
+    "d415"
+  ],
+  "mast3r": {
+    "frames": 28,
+    "median_points": 3499,
+    "median_inlier_fraction": 0.9082,
+    "median_depth_error_m": 0.0068,
+    "median_fused_points": 12288
+  }
+}

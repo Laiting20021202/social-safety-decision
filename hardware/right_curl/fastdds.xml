@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>arm_lan_udp</transport_id>
+      <type>UDPv4</type>
+      <maxMessageSize>1400</maxMessageSize>
+      <sendBufferSize>1048576</sendBufferSize>
+      <receiveBufferSize>2097152</receiveBufferSize>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="openarm_lan" is_default_profile="true">
+    <rtps>
+      <userTransports><transport_id>arm_lan_udp</transport_id></userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

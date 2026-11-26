@@ -1,0 +1,5 @@
+<library path="right_curl_hw">
+  <class name="openarm_right_curl/RightArm" type="openarm_right_curl::RightArm" base_class_type="hardware_interface::SystemInterface">
+    <description>Measured right arm state and a bounded position command for the elbow.</description>
+  </class>
+</library>

@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 790" role="img" aria-labelledby="title desc">
+<title id="title">OpenArm 三台主機、Docker 與 ROS 2 資料流</title>
+<desc id="desc">上圖為實機配置。控制 NUC 發布胸口 RGB-D 與關節，Thor 輸出點雲，工作站顯示 RViz 並經人手檢查與 MoveIt 規劃回傳短軌跡。下圖顯示實際錄影使用的模擬部署，Isaac 取代 NUC 的感測器與馬達。</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L8 4L0 8Z" fill="#263e49"/></marker><marker id="return" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L8 4L0 8Z" fill="#915121"/></marker></defs>
+<style>
+text{font-family:"Noto Sans CJK TC","Microsoft JhengHei",Arial,sans-serif;fill:#192e37}
+.head{font-size:28px;font-weight:700}.sub{font-size:17px;fill:#455e69}.host{fill:#e4efe1;stroke:#8aab83;stroke-width:1.5}.h{font-size:23px;font-weight:700}
+.container{fill:#f7f8f5;stroke:#9ba9a7;stroke-width:1.15}.name{font:14px "DejaVu Sans Mono",monospace;fill:#3a5058}
+.node{fill:#e5effb;stroke:#789cc4;stroke-width:1.2}.device{fill:#efe6f2;stroke:#ae8fbb}.n{font-size:18px;font-weight:600}.small{font-size:15px}
+.wire{fill:none;stroke:#263e49;stroke-width:1.8;stroke-linejoin:round;marker-end:url(#arrow)}.cmd{fill:none;stroke:#915121;stroke-width:2.1;stroke-linejoin:round;marker-end:url(#return)}
+.port{font-size:15px;font-weight:600;paint-order:stroke;stroke:#fff;stroke-width:5px;stroke-linejoin:round}
+</style>
+<rect x="1" y="1" width="1278" height="788" fill="#fff" stroke="#d5deda" rx="16"/>
+<text x="32" y="45" class="head">OpenArm　三台主機與 ROS 2 資料流</text>
+<text x="33" y="76" class="sub">實機配置　ROS_DOMAIN_ID=88　｜　Fast DDS / host network　｜　相機、關節與運動命令皆經 ROS 2</text>
+<rect x="26" y="111" width="345" height="415" rx="23" class="host"/>
+<rect x="459" y="111" width="311" height="199" rx="23" class="host"/>
+<rect x="865" y="111" width="389" height="415" rx="23" class="host"/>
+<text x="48" y="150" class="h">OpenArm 控制 NUC</text>
+<text x="477" y="150" class="h">Jetson Thor</text>
+<text x="884" y="150" class="h">本機工作站</text>
+<rect x="44" y="170" width="308" height="109" rx="13" class="container"/>
+<text x="59" y="194" class="name">laiting-openarm-d415</text>
+<rect x="58" y="211" width="109" height="49" rx="7" class="device"/>
+<text x="112" y="242" text-anchor="middle" class="n">胸口 D415</text>
+<path d="M168 235H192" class="wire"/>
+<rect x="194" y="211" width="142" height="49" rx="7" class="node"/>
+<text x="264" y="242" text-anchor="middle" class="n">相機驅動</text>
+<rect x="44" y="320" width="308" height="180" rx="13" class="container"/>
+<text x="59" y="347" class="name">laiting-openarm-gateway</text>
+<rect x="58" y="363" width="109" height="57" rx="7" class="device"/>
+<text x="112" y="387" text-anchor="middle" class="n">OpenArm</text>
+<text x="112" y="407" text-anchor="middle" class="small">CAN-FD</text>
+<rect x="194" y="363" width="142" height="57" rx="7" class="node"/>
+<text x="264" y="397" text-anchor="middle" class="n">ros2_control</text>
+<path d="M168 382H192" class="wire"/><path d="M194 403H170" class="cmd"/>
+<text x="60" y="455" class="small">兩臂回授、robot_state_publisher</text>
+<text x="60" y="479" class="small">右肘 J4 軌跡控制器</text>
+<rect x="476" y="170" width="277" height="120" rx="13" class="container"/>
+<text x="490" y="194" class="name">laiting-openarm-thor</text>
+<rect x="491" y="207" width="245" height="63" rx="7" class="node"/>
+<text x="614" y="232" text-anchor="middle" class="n">MASt3R　GPU 推論</text>
+<text x="614" y="255" text-anchor="middle" class="small">用對齊深度驗證並融合</text>
+<rect x="882" y="170" width="355" height="330" rx="13" class="container"/>
+<text x="897" y="195" class="name">laiting-openarm-station</text>
+<rect x="899" y="207" width="319" height="55" rx="7" class="node"/>
+<text x="1058" y="241" text-anchor="middle" class="n">點雲配準 → RViz、MoveIt OctoMap</text>
+<rect x="899" y="316" width="319" height="85" rx="7" class="node"/>
+<text x="1059" y="346" text-anchor="middle" class="n">手部辨識與深度距離檢查</text>
+<text x="1059" y="374" text-anchor="middle" class="small">MediaPipe、TF、資料時效</text>
+<path d="M1059 263V311" class="wire"/><text x="1073" y="293" class="small">點雲狀態</text>
+<rect x="899" y="440" width="319" height="45" rx="7" class="node"/>
+<text x="1059" y="468" text-anchor="middle" class="n">MoveIt 規劃與短軌跡控制</text>
+<path d="M1059 402V436" class="wire"/><text x="1073" y="428" class="small">允許／保持</text>
+<path d="M337 235H488" class="wire"/><text x="411" y="222" text-anchor="middle" class="port">RGB-D</text>
+<path d="M737 235H895" class="wire"/><text x="816" y="222" text-anchor="middle" class="port">PointCloud2</text>
+<circle cx="406" cy="235" r="3.4" fill="#263e49"/><path d="M406 235V335H895" class="wire"/>
+<text x="609" y="328" text-anchor="middle" class="port">同一顆相機的彩色、對齊深度與內參</text>
+<path d="M337 391H895" class="wire"/><text x="613" y="380" text-anchor="middle" class="port">/joint_states、/tf、/tf_static</text>
+<path d="M1135 486V554H326V424" class="cmd"/>
+<text x="703" y="545" text-anchor="middle" class="port">/right_joint_trajectory_controller/joint_trajectory</text>
+<rect x="26" y="590" width="1228" height="174" rx="18" fill="#f0f5fa" stroke="#93aabf"/>
+<text x="48" y="627" class="h">本次 Isaac 實驗　ROS_DOMAIN_ID=89</text>
+<text x="50" y="660" class="sub">本機 Isaac Docker 產生胸口 RGB-D 與 PhysX 關節回授。Thor 使用獨立模擬容器，本機控制 Docker 執行相同的感知與規劃。</text>
+<rect x="53" y="689" width="258" height="48" rx="8" class="node"/><text x="182" y="719" text-anchor="middle" class="small">laiting-isaac-fixed-world</text>
+<path d="M312 713H421" class="wire"/><text x="364" y="700" text-anchor="middle" class="port">RGB-D</text>
+<rect x="425" y="689" width="229" height="48" rx="8" class="node"/><text x="540" y="719" text-anchor="middle" class="small">laiting-isaac-thor</text>
+<path d="M655 713H771" class="wire"/><text x="714" y="700" text-anchor="middle" class="port">點雲</text>
+<rect x="775" y="689" width="391" height="48" rx="8" class="node"/><text x="971" y="719" text-anchor="middle" class="small">laiting-isaac-curl-station　RViz / MoveIt / JTC</text>
+<path d="M971 736V751H181V740" class="cmd"/>
+</svg>

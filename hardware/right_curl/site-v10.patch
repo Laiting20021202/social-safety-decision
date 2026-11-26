@@ -1,0 +1,223 @@
+diff --git a/config/arm/v10/control_gains.yaml b/config/arm/v10/control_gains.yaml
+index 7364f59..8a3524e 100644
+--- a/config/arm/v10/control_gains.yaml
++++ b/config/arm/v10/control_gains.yaml
+@@ -13,29 +13,38 @@
+ # limitations under the License.
+ 
+ joint1:
++  # Keep the shared/right-arm stiffness at 70. Test left J1 at 80 with
++  # unchanged damping; compare tracking error at the same pose before tuning further.
+   kp: 70.0
+-  kd: 2.75
++  left_kp: 80.0
++  kd: 3.5
+ 
+ joint2:
+-  kp: 70.0
+-  kd: 2.5
++  kp: 50.0
++  kd: 3.5
+ 
+ joint3:
+-  kp: 70.0
+-  kd: 2.0
++  kp: 50.0
++  kd: 3.0
+ 
+ joint4:
++  # Loaded wrist needs the driver's original stiffness to stay within the
++  # controller's 0.05 rad goal tolerance in the gravity-test pose.
+   kp: 60.0
+-  kd: 2.0
++  kd: 3.0
+ 
+ joint5:
+   kp: 10.0
+-  kd: 0.7
++  kd: 1.2
+ 
+ joint6:
+-  kp: 10.0
+-  kd: 0.6
++  # Increase wrist holding stiffness incrementally.  At kp=10 the latest
++  # stationary sample retained about 0.024 rad (1.37 deg) of J6 error.
++  kp: 15.0
++  kd: 1.0
+ 
+ joint7:
++  # Restore the driver's original wrist stiffness; the camera/cable payload
++  # otherwise leaves this joint too close to the 0.05 rad goal tolerance.
+   kp: 10.0
+-  kd: 0.5
++  kd: 0.8
+diff --git a/urdf/ee/openarm_hand.xacro b/urdf/ee/openarm_hand.xacro
+index ab677fa..5ec5bde 100644
+--- a/urdf/ee/openarm_hand.xacro
++++ b/urdf/ee/openarm_hand.xacro
+@@ -32,6 +32,16 @@
+       <child link="${ee_prefix}hand_tcp" />
+     </joint>
+ 
++    <!-- Physical fingertip center, defined directly from the hand so target
++         motion and calibration do not depend on the compatibility TCP. -->
++    <link name="${ee_prefix}fingertip_center" />
++
++    <joint name="${ee_prefix}fingertip_center_joint" type="fixed">
++      <origin xyz="0 0 0.08" rpy="0 0 0" />
++      <parent link="${ee_prefix}hand" />
++      <child link="${ee_prefix}fingertip_center" />
++    </joint>
++
+     <link name="${ee_prefix}left_finger">
+       <visual name="${ee_prefix}left_finger_visual">
+         <xacro:openarm-ee-kinematics-link config="${ee_kinematics_link}" name="left_finger" />
+diff --git a/urdf/ee/openarm_hand_arguments.xacro b/urdf/ee/openarm_hand_arguments.xacro
+index 490ac30..827fb05 100644
+--- a/urdf/ee/openarm_hand_arguments.xacro
++++ b/urdf/ee/openarm_hand_arguments.xacro
+@@ -11,7 +11,7 @@
+   <xacro:arg name="rpy_ee" default= "0 0 0" />
+ 
+   <!-- Position offset between ee frame and tcp frame -->
+-  <xacro:arg name="tcp_xyz" default="0 -0.0 0.08" />
++  <xacro:arg name="tcp_xyz" default="0 0 0.05" />
+ 
+   <!-- Rotation offset between ee frame and tcp frame -->
+   <xacro:arg name="tcp_rpy" default="0 0 0" />
+@@ -22,4 +22,4 @@
+   <!-- Name of the description package -->
+   <xacro:arg name="description_pkg" default="openarm_description" />
+ 
+-</robot>
+\ No newline at end of file
++</robot>
+diff --git a/urdf/robot/openarm_robot.xacro b/urdf/robot/openarm_robot.xacro
+index e0ff3a9..dfb1ffb 100644
+--- a/urdf/robot/openarm_robot.xacro
++++ b/urdf/robot/openarm_robot.xacro
+@@ -37,6 +37,10 @@
+             left_arm_prefix:='left_'
+             right_arm_prefix:='right_'
+             can_fd:='true'
++            gravity_compensation_scale:='0.0'
++            gravity_torque_limit_nm:='2.0'
++            left_gravity_torque_limit_nm:='2.0'
++            right_gravity_torque_limit_nm:='2.0'
+             "
+             >
+ 
+@@ -110,7 +114,11 @@
+             fake_sensor_commands="${fake_sensor_commands}"
+             left_arm_prefix="${left_arm_prefix}"
+             right_arm_prefix="${right_arm_prefix}"
+-            hand="${hand}"/>
++            hand="${hand}"
++            gravity_compensation_scale="${gravity_compensation_scale}"
++            gravity_torque_limit_nm="${gravity_torque_limit_nm}"
++            left_gravity_torque_limit_nm="${left_gravity_torque_limit_nm}"
++            right_gravity_torque_limit_nm="${right_gravity_torque_limit_nm}"/>
+         </xacro:if>
+ 
+         <xacro:if value="$(eval hand and ee_type == 'openarm_hand')">
+@@ -197,4 +205,4 @@
+         </xacro:if>
+ 
+   </xacro:macro>
+-</robot>
+\ No newline at end of file
++</robot>
+diff --git a/urdf/robot/v10.urdf.xacro b/urdf/robot/v10.urdf.xacro
+index fc0420a..a838360 100644
+--- a/urdf/robot/v10.urdf.xacro
++++ b/urdf/robot/v10.urdf.xacro
+@@ -49,6 +49,13 @@
+ 
+   <xacro:arg name="can_fd" default="true" />
+ 
++  <!-- Keep disabled unless explicitly commissioned at launch. -->
++  <xacro:arg name="gravity_compensation_scale" default="0.0" />
++  <xacro:arg name="gravity_torque_limit_nm" default="2.0" />
++  <!-- Per-arm limits default to the legacy shared limit for compatibility. -->
++  <xacro:arg name="left_gravity_torque_limit_nm" default="$(arg gravity_torque_limit_nm)" />
++  <xacro:arg name="right_gravity_torque_limit_nm" default="$(arg gravity_torque_limit_nm)" />
++
+   <xacro:openarm_robot
+   arm_type="v10"
+   body_type="v10"
+@@ -83,6 +90,10 @@
+   right_arm_base_rpy="$(arg right_arm_base_rpy)"
+   left_arm_base_rpy="$(arg left_arm_base_rpy)"
+   can_fd="$(arg can_fd)"
++  gravity_compensation_scale="$(arg gravity_compensation_scale)"
++  gravity_torque_limit_nm="$(arg gravity_torque_limit_nm)"
++  left_gravity_torque_limit_nm="$(arg left_gravity_torque_limit_nm)"
++  right_gravity_torque_limit_nm="$(arg right_gravity_torque_limit_nm)"
+   />
+ 
+ </robot>
+diff --git a/urdf/ros2_control/openarm.bimanual.ros2_control.xacro b/urdf/ros2_control/openarm.bimanual.ros2_control.xacro
+index 56916e5..5c990d0 100644
+--- a/urdf/ros2_control/openarm.bimanual.ros2_control.xacro
++++ b/urdf/ros2_control/openarm.bimanual.ros2_control.xacro
+@@ -11,6 +11,18 @@
+              hand:=^|false
+              left_arm_prefix:=^|left_
+              right_arm_prefix:=^|right_
++             gravity_compensation_scale:=^|0.0
++             gravity_torque_limit_nm:=^|2.0
++             left_gravity_torque_limit_nm:=^|2.0
++             right_gravity_torque_limit_nm:=^|2.0
++             right_finger_equivalent_mass_kg:=^|0.0720509
++             right_finger_equivalent_com_x:=^|0.0064528
++             right_finger_equivalent_com_y:=^|0.0
++             right_finger_equivalent_com_z:=^|-0.0130315
++             right_payload_mass_kg:=^|0.0
++             right_payload_com_x:=^|0.0
++             right_payload_com_y:=^|0.0
++             right_payload_com_z:=^|0.0
+              can_fd:=^|true">
+ 
+     <!-- Left Arm Hardware Interface -->
+@@ -28,7 +40,19 @@
+             <param name="arm_prefix">${left_arm_prefix}</param>
+             <param name="hand">${hand}</param>
+             <param name="can_fd">${can_fd}</param>
+-            <param name="kp1">${control_gains['joint1']['kp']}</param>
++            <!-- No extra payload is currently mounted on the left wrist. The
++                 arm, hand and gripper inertias remain part of the URDF model. -->
++            <param name="gravity_compensation_scale">${gravity_compensation_scale}</param>
++            <param name="gravity_torque_limit_nm">${left_gravity_torque_limit_nm}</param>
++            <param name="finger_equivalent_mass_kg">0.0</param>
++            <param name="finger_equivalent_com_x">0.0</param>
++            <param name="finger_equivalent_com_y">0.0</param>
++            <param name="finger_equivalent_com_z">0.0</param>
++            <param name="payload_mass_kg">0.0</param>
++            <param name="payload_com_x">0.0</param>
++            <param name="payload_com_y">0.0</param>
++            <param name="payload_com_z">0.0</param>
++            <param name="kp1">${control_gains['joint1'].get('left_kp', control_gains['joint1']['kp'])}</param>
+             <param name="kp2">${control_gains['joint2']['kp']}</param>
+             <param name="kp3">${control_gains['joint3']['kp']}</param>
+             <param name="kp4">${control_gains['joint4']['kp']}</param>
+@@ -93,6 +117,20 @@
+             <param name="arm_prefix">${right_arm_prefix}</param>
+             <param name="hand">${hand}</param>
+             <param name="can_fd">${can_fd}</param>
++            <!-- The KDL serial chain ends at hand_tcp and therefore excludes
++                 both finger branches. Add their validated gravity-equivalent
++                 point mass exactly once. External payload defaults to zero;
++                 it may only be configured after a separate payload audit. -->
++            <param name="gravity_compensation_scale">${gravity_compensation_scale}</param>
++            <param name="gravity_torque_limit_nm">${right_gravity_torque_limit_nm}</param>
++            <param name="finger_equivalent_mass_kg">${right_finger_equivalent_mass_kg}</param>
++            <param name="finger_equivalent_com_x">${right_finger_equivalent_com_x}</param>
++            <param name="finger_equivalent_com_y">${right_finger_equivalent_com_y}</param>
++            <param name="finger_equivalent_com_z">${right_finger_equivalent_com_z}</param>
++            <param name="payload_mass_kg">${right_payload_mass_kg}</param>
++            <param name="payload_com_x">${right_payload_com_x}</param>
++            <param name="payload_com_y">${right_payload_com_y}</param>
++            <param name="payload_com_z">${right_payload_com_z}</param>
+             <param name="kp1">${control_gains['joint1']['kp']}</param>
+             <param name="kp2">${control_gains['joint2']['kp']}</param>
+             <param name="kp3">${control_gains['joint3']['kp']}</param>

@@ -1,0 +1,76 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Global Options:
+    Fixed Frame: world
+    Background Color: 43; 47; 53
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Ground (10 cm)
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 20
+      Color: 110; 118; 128
+    - Class: rviz_default_plugins/RobotModel
+      Name: OpenArm
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /robot_description
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+        History Policy: Keep Last
+        Depth: 1
+      Visual Enabled: true
+      Collision Enabled: false
+    - Class: rviz_default_plugins/PointCloud2
+      Name: D415 preview
+      Enabled: true
+      Topic:
+        Value: /laiting/preview/points
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 1
+      Style: Flat Squares
+      Size (m): 0.012
+      Color Transformer: RGB8
+      Position Transformer: XYZ
+      Decay Time: 0
+    - Class: rviz_default_plugins/PointCloud2
+      Name: D415 surveyed
+      Enabled: true
+      Topic:
+        Value: /laiting/scene/points
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 1
+      Style: Flat Squares
+      Size (m): 0.012
+      Color Transformer: RGB8
+      Position Transformer: XYZ
+      Decay Time: 0
+    - Class: rviz_default_plugins/Marker
+      Name: Hand guard
+      Enabled: true
+      Topic:
+        Value: /laiting/safety/marker
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        Depth: 1
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 1.60
+      Focal Point: {X: 0.18, Y: -0.07, Z: 0.40}
+      Pitch: 0.52
+      Yaw: 5.33
+Window Geometry:
+  Width: 1120
+  Height: 800

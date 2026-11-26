@@ -1,0 +1,1 @@
+<library path="laiting_isaac_hw"><class name="laiting_isaac/Bridge" type="laiting_isaac::Bridge" base_class_type="hardware_interface::SystemInterface"><description>Dedicated Isaac articulation measured encoder transport.</description></class></library>
